@@ -178,10 +178,10 @@ class DEP5Adapter(FormatAdapter):
             self._primary_header = copy.deepcopy(doc.get("header", {}))
 
         for stanza in doc.get("stanzas", []):
-            yield Entry(data=copy.deepcopy(stanza), kind=EntryKind.STANZA, source_id="")
+            yield Entry(data=stanza, kind=EntryKind.STANZA, source_id="")
 
         for lic in doc.get("licenses", []):
-            yield Entry(data=copy.deepcopy(lic), kind=EntryKind.LICENSE_TEXT, source_id="")
+            yield Entry(data=lic, kind=EntryKind.LICENSE_TEXT, source_id="")
 
     def identity(self, entry: Entry) -> str:
         if entry.kind == EntryKind.STANZA:

@@ -29,7 +29,10 @@ class CycloneDXAdapter(FormatAdapter):
     def load(self, raw: bytes) -> dict:
         """Parse CDX JSON and validate format."""
         self._first_metadata = None
-        doc = json.loads(raw)
+        try:
+            doc = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in CycloneDX file: {e}") from e
         
         if doc.get("bomFormat") != "CycloneDX":
             raise ValueError(f"Not a CycloneDX document. Got bomFormat: {doc.get('bomFormat')}")
@@ -49,10 +52,10 @@ class CycloneDXAdapter(FormatAdapter):
         metadata_comp = doc.get("metadata", {}).get("component")
         if metadata_comp:
             # Upload component -> PACKAGE kind
-            yield Entry(data=copy.deepcopy(metadata_comp), kind=EntryKind.PACKAGE, source_id="")
+            yield Entry(data=metadata_comp, kind=EntryKind.PACKAGE, source_id="")
             
         for file_comp in doc.get("components", []):
-            yield Entry(data=copy.deepcopy(file_comp), kind=EntryKind.FILE, source_id="")
+            yield Entry(data=file_comp, kind=EntryKind.FILE, source_id="")
 
     def identity(self, entry: Entry) -> str:
         """Resolve identity from hashes array."""

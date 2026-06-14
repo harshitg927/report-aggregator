@@ -152,7 +152,7 @@ class ReadMeOSSAdapter(FormatAdapter):
 
         for section in doc.get("sections", []):
             for block in section.get("blocks", []):
-                data = copy.deepcopy(block)
+                data = block
                 data["section"] = section.get("name", "")
                 yield Entry(data=data, kind=EntryKind.LICENSE_TEXT, source_id="")
 

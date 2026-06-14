@@ -158,10 +158,11 @@ def compute_spdx3_checksum_identity(
     )
 
 
-def compute_stanza_identity(license_expression: str, file_globs: list[str]) -> str:
+def compute_stanza_identity(license_expression: str | None, file_globs: list[str]) -> str:
     """Compute DEP5 Files stanza identity per architecture §4.1."""
+    expr = (license_expression or "").strip()
     normalized_globs = sorted(g.strip() for g in file_globs if g.strip())
-    key = f"{license_expression.strip()}\0" + "\0".join(normalized_globs)
+    key = f"{expr}\0" + "\0".join(normalized_globs)
     return hashlib.md5(key.encode("utf-8")).hexdigest()
 
 

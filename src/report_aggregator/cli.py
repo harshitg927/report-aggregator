@@ -56,15 +56,27 @@ def _sniff_format(path: Path) -> str | None:
 
 def _detect_format(paths: list[Path]) -> str | None:
     """Attempt to detect the report format from filenames and content."""
-    formats: list[str] = []
+    formats: list[str | None] = []
     for p in paths:
         fmt = _sniff_format(p)
-        if fmt is None:
-            return None
         formats.append(fmt)
 
-    if len(set(formats)) == 1:
+    # Check if any format is None
+    if None in formats:
+        return None
+
+    # Check if all formats are the same
+    unique_formats = set(formats)
+    if len(unique_formats) == 1:
         return formats[0]
+    
+    # Format mismatch detected
+    print(
+        "Error: Input format mismatch detected:",
+        file=sys.stderr
+    )
+    for p, fmt in zip(paths, formats):
+        print(f"  {p}: {fmt}", file=sys.stderr)
     return None
 
 
@@ -170,6 +182,18 @@ def _handle_merge(args: argparse.Namespace) -> int:
             )
             return 1
         print(f"Auto-detected format: {format_name}")
+    else:
+        # Validate all inputs match the explicitly provided format
+        detected_formats = [(p, _sniff_format(p)) for p in input_paths]
+        mismatches = [(p, f) for p, f in detected_formats if f and f != format_name]
+        if mismatches:
+            print(
+                f"Error: Format mismatch. Expected all files to be '{format_name}', but found:",
+                file=sys.stderr
+            )
+            for p, f in mismatches:
+                print(f"  {p}: {f}", file=sys.stderr)
+            return 1
 
     try:
         mapping = load_mapping(format_name)

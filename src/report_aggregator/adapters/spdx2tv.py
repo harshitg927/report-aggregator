@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import uuid
 from datetime import datetime, timezone
@@ -25,6 +26,18 @@ def _accumulate_field(item: dict[str, Any], key: str, val: Any) -> None:
         existing.append(val)
     else:
         item[key] = [existing, val]
+
+
+def _calculate_verification_code(file_sha1s: list[str]) -> str:
+    """Calculate SPDX PackageVerificationCode per spec §7.10.
+    
+    Verification code = SHA1(sorted SHA1 checksums of all files).
+    """
+    if not file_sha1s:
+        return ""
+    sorted_hashes = sorted(file_sha1s)
+    combined = "".join(sorted_hashes)
+    return hashlib.sha1(combined.encode("utf-8")).hexdigest()
 
 
 class SPDX2TVAdapter(FormatAdapter):
@@ -127,9 +140,11 @@ class SPDX2TVAdapter(FormatAdapter):
                         "relatedSpdxElement": parts[2],
                     })
             elif key == "PackageChecksum" or key == "FileChecksum":
-                parts = val.split(":")
+                parts = val.split(":", 1)
                 if len(parts) == 2:
                     current_item["checksums"][parts[0].strip()] = parts[1].strip()
+                else:
+                    raise ValueError(f"Malformed checksum (missing colon): {key}: {val}")
             elif key == "LicenseInfoInFile":
                 current_item.setdefault("LicenseInfoInFile", []).append(val)
             elif key == "LicenseID":
@@ -137,6 +152,11 @@ class SPDX2TVAdapter(FormatAdapter):
                     current_section = "license_info"
                 current_item = {"LicenseID": val}
                 doc["extracted_licensing_info"].append(current_item)
+            elif key == "ExtractedText" and current_section == "license_info":
+                if len(doc["extracted_licensing_info"]) > 0:
+                    current_item = doc["extracted_licensing_info"][-1]
+                    # Handle <text>...</text> blocks - val already processed above
+                    current_item["ExtractedText"] = val
             elif key == "Creator":
                 _accumulate_field(current_item, key, val)
             else:
@@ -196,6 +216,11 @@ class SPDX2TVAdapter(FormatAdapter):
         for p in doc.get("packages", []):
             if "SPDXID" in p:
                 p["SPDXID"] = remap.get(p["SPDXID"], p["SPDXID"])
+            # Package-level license fields can contain LicenseRefs
+            if "PackageLicenseConcluded" in p:
+                p["PackageLicenseConcluded"] = self._remap_license_expression(p["PackageLicenseConcluded"], remap)
+            if "PackageLicenseDeclared" in p:
+                p["PackageLicenseDeclared"] = self._remap_license_expression(p["PackageLicenseDeclared"], remap)
                 
         for f in doc.get("files", []):
             if "SPDXID" in f:
@@ -261,6 +286,28 @@ class SPDX2TVAdapter(FormatAdapter):
                 # We can enforce last-writer in the conflict engine later if needed, but for now
                 # first-writer is fine as long as we deduplicate correctly.
                 out_doc["extracted_licensing_info"].append(e.data)
+        
+        # Recalculate PackageVerificationCode for each package (SPDX 2.3 §7.10)
+        for pkg in out_doc["packages"]:
+            pkg_id = pkg.get("SPDXID")
+            if not pkg_id:
+                continue
+            
+            # Find all files that belong to this package via CONTAINS relationships
+            pkg_file_sha1s = []
+            for rel in out_doc["relationships"]:
+                if rel["spdxElementId"] == pkg_id and rel["type"] == "CONTAINS":
+                    file_id = rel["relatedSpdxElement"]
+                    # Find the file entry with this ID
+                    for e in entries:
+                        if e.kind == EntryKind.FILE and e.data.get("SPDXID") == file_id:
+                            sha1 = e.data.get("checksums", {}).get("SHA1")
+                            if sha1:
+                                pkg_file_sha1s.append(sha1)
+                            break
+            
+            if pkg_file_sha1s:
+                pkg["PackageVerificationCode"] = _calculate_verification_code(pkg_file_sha1s)
                 
         return out_doc
 

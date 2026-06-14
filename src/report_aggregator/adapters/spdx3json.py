@@ -47,7 +47,10 @@ class SPDX3JSONAdapter(FormatAdapter):
         self._primary_meta: dict[str, Any] = {}
 
     def load(self, raw: bytes) -> dict[str, Any]:
-        nodes = json.loads(_sanitize_json_text(raw))
+        try:
+            nodes = json.loads(_sanitize_json_text(raw))
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in SPDX 3 file: {e}") from e
         if not isinstance(nodes, list):
             raise ValueError("SPDX 3 JSON must be a top-level array of nodes")
 
@@ -57,18 +60,35 @@ class SPDX3JSONAdapter(FormatAdapter):
             if node_id:
                 by_id[node_id] = node
 
-        return {"nodes": nodes, "by_id": by_id}
-
-    def _collect_satellites(self, doc: dict[str, Any], subject_id: str) -> list[dict[str, Any]]:
-        satellites: list[dict[str, Any]] = []
-        prefix = subject_id + "#"
-        for node in doc["nodes"]:
+        # Pre-index satellites by subject for O(1) lookup instead of O(N)
+        satellites_by_subject: dict[str, list[dict]] = {}
+        for node in nodes:
             node_type = node.get("type", "")
             if node_type in _META_NODE_TYPES or node_type in _ENTRY_NODE_TYPES:
                 continue
+            
+            # Index by subject field
+            subject = node.get("subject")
+            if subject:
+                satellites_by_subject.setdefault(subject, []).append(node)
+            
+            # Also index by ID prefix for fragment-based satellites
             node_id = node.get("spdxId") or node.get("@id", "")
-            if node.get("subject") == subject_id or node_id.startswith(prefix):
-                satellites.append(copy.deepcopy(node))
+            if "#" in node_id:
+                prefix = node_id.rsplit("#", 1)[0]
+                satellites_by_subject.setdefault(prefix + "#", []).append(node)
+
+        return {"nodes": nodes, "by_id": by_id, "satellites_by_subject": satellites_by_subject}
+
+    def _collect_satellites(self, doc: dict[str, Any], subject_id: str) -> list[dict[str, Any]]:
+        """Collect satellite nodes for a given subject ID.
+        
+        Uses pre-indexed lookup for O(1) performance instead of O(N) iteration.
+        """
+        satellites = doc.get("satellites_by_subject", {}).get(subject_id, []).copy()
+        # Also check for fragment-based satellites
+        prefix_key = subject_id + "#"
+        satellites.extend(doc.get("satellites_by_subject", {}).get(prefix_key, []))
         return satellites
 
     def entries(self, doc: dict[str, Any]) -> Iterable[Entry]:
@@ -81,15 +101,15 @@ class SPDX3JSONAdapter(FormatAdapter):
         for node in doc["nodes"]:
             node_type = node.get("type", "")
             if node_type == _PACKAGE_TYPE:
-                data = copy.deepcopy(node)
+                data = node
                 data["_satellites"] = self._collect_satellites(doc, node["spdxId"])
                 yield Entry(data=data, kind=EntryKind.PACKAGE, source_id="")
             elif node_type == _FILE_TYPE:
-                data = copy.deepcopy(node)
+                data = node
                 data["_satellites"] = self._collect_satellites(doc, node["spdxId"])
                 yield Entry(data=data, kind=EntryKind.FILE, source_id="")
             elif node_type == _CUSTOM_LICENSE_TYPE:
-                yield Entry(data=copy.deepcopy(node), kind=EntryKind.LICENSE_TEXT, source_id="")
+                yield Entry(data=node, kind=EntryKind.LICENSE_TEXT, source_id="")
 
     def identity(self, entry: Entry) -> str:
         if entry.kind in (EntryKind.PACKAGE, EntryKind.FILE):

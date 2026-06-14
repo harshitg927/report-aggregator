@@ -84,6 +84,12 @@ def merge_reports(
         for entry in adapter.entries(doc):
             entry.source_id = inp.source_id
             entry.identity_key = adapter.identity(entry)
+            if not entry.identity_key:
+                name = entry.data.get("name") or entry.data.get("FileName") or entry.data.get("SPDXID") or "unknown"
+                raise ValueError(
+                    f"Cannot compute identity for {entry.kind.value} '{name}' from {inp.source_id}: "
+                    f"missing required checksums/hashes"
+                )
             all_entries.append(entry)
 
     # -- Step 2: Group by identity --

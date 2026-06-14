@@ -34,11 +34,24 @@ def merge_union_field(
     Returns:
         Tuple of (merged_list, contributing_source_ids).
     """
+    # Validate type consistency - all values must be same type or compatible
+    types = {type(v).__name__ for v, _ in values_with_sources}
+    if len(types) > 1:
+        # Allow mixing None with other types, but not mixing different non-None types
+        non_none_types = types - {"NoneType"}
+        if len(non_none_types) > 1:
+            raise TypeError(
+                f"Union field has inconsistent types: {types}. "
+                f"All inputs must use same type (list or scalar)."
+            )
+    
     seen: list[Any] = []
     seen_keys: set[str] = set()
     all_sources: list[str] = []
 
     for value, source_id in values_with_sources:
+        if value is None:
+            continue
         items = value if isinstance(value, list) else [value]
         for item in items:
             # Use JSON-stable key for dedup
