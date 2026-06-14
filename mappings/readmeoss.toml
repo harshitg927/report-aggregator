@@ -1,0 +1,10 @@
+[readmeoss]
+category = "stanza"
+
+entries_path = "blocks"
+license_identity = "md5(normalized_text)"
+
+union_fields = []
+conflict_fields = []
+
+section_order = ["MAIN LICENSES", "OTHER LICENSES", "ACKNOWLEDGEMENTS"]

@@ -19,6 +19,7 @@ class EntryKind(Enum):
     PACKAGE = "package"
     FILE = "file"
     LICENSE_TEXT = "license_text"
+    STANZA = "stanza"
 
 
 @dataclass

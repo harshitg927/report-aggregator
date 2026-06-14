@@ -1,0 +1,16 @@
+[spdx3json]
+category = "graph"
+
+entries_path = "nodes"
+package_identity = ["verifiedUsing.sha1"]
+file_identity = ["verifiedUsing.sha1"]
+
+local_ref_field = "spdxId"
+ref_graph_path = "relationships"
+element_list_path = "element"
+
+union_fields = ["verifiedUsing"]
+conflict_fields = ["name", "software_copyrightText"]
+
+license_text_path = "expandedlicensing_CustomLicense"
+license_text_field = "simplelicensing_licenseText"

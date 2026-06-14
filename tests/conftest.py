@@ -25,3 +25,27 @@ def spdx2fckeditor_path(fixtures_dir: Path) -> Path:
 @pytest.fixture
 def spdx2zlib_path(fixtures_dir: Path) -> Path:
     return fixtures_dir / "SPDX2TV_zlib132.zip.spdx"
+
+@pytest.fixture
+def dep5fckeditor_path(fixtures_dir: Path) -> Path:
+    return fixtures_dir / "DEP5_fckeditor-2.4.8.zip.txt"
+
+@pytest.fixture
+def dep5zlib_path(fixtures_dir: Path) -> Path:
+    return fixtures_dir / "DEP5_zlib132.zip.txt"
+
+@pytest.fixture
+def readmeossfckeditor_path(fixtures_dir: Path) -> Path:
+    return fixtures_dir / "ReadMe_OSS_fckeditor-2.4.8.zip.txt"
+
+@pytest.fixture
+def readmeosszlib_path(fixtures_dir: Path) -> Path:
+    return fixtures_dir / "ReadMe_OSS_zlib132.zip.txt"
+
+@pytest.fixture
+def spdx3fckeditor_path(fixtures_dir: Path) -> Path:
+    return fixtures_dir / "SPDX3JSON_fckeditor-2.4.8.zip.json"
+
+@pytest.fixture
+def spdx3zlib_path(fixtures_dir: Path) -> Path:
+    return fixtures_dir / "SPDX3JSON_zlib132.zip.json"

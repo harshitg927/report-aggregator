@@ -9,9 +9,8 @@ from pathlib import Path
 from report_aggregator.engine.mapping import MappingError, load_mapping
 
 
-# Format auto-detection by file extension
+# Format auto-detection by file extension (non-ambiguous types)
 _EXT_FORMAT_MAP = {
-    ".json": "cyclonedx",
     ".spdx": "spdx2tv",
 }
 
@@ -19,26 +18,58 @@ _EXT_FORMAT_MAP = {
 _ADAPTER_REGISTRY: dict[str, type] = {}
 
 
+def _sniff_format(path: Path) -> str | None:
+    """Detect format from filename pattern or file content."""
+    name = path.name
+    if name.startswith("DEP5_"):
+        return "dep5"
+    if name.startswith("ReadMe_OSS_"):
+        return "readmeoss"
+    if name.startswith("SPDX3JSON_"):
+        return "spdx3json"
+    if name.startswith("CYCLONEDX_JSON_"):
+        return "cyclonedx"
+
+    try:
+        head = path.read_bytes()[:4096].decode("utf-8", errors="replace")
+    except OSError:
+        return _EXT_FORMAT_MAP.get(path.suffix.lower())
+
+    if head.startswith("Format: https://www.debian.org/doc/packaging-manuals/copyright-format/"):
+        return "dep5"
+    if head.lstrip().startswith("=" * 20):
+        return "readmeoss"
+
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        stripped = head.lstrip()
+        if stripped.startswith("["):
+            return "spdx3json"
+        if '"bomFormat"' in head or '"specVersion"' in head:
+            return "cyclonedx"
+
+    if suffix == ".txt":
+        return None
+
+    return _EXT_FORMAT_MAP.get(suffix)
+
+
 def _detect_format(paths: list[Path]) -> str | None:
-    """Attempt to detect the report format from file extensions.
-
-    Returns the format name if all inputs share a recognizable extension,
-    or None if detection fails.
-    """
-    formats = set()
+    """Attempt to detect the report format from filenames and content."""
+    formats: list[str] = []
     for p in paths:
-        fmt = _EXT_FORMAT_MAP.get(p.suffix.lower())
-        if fmt:
-            formats.add(fmt)
+        fmt = _sniff_format(p)
+        if fmt is None:
+            return None
+        formats.append(fmt)
 
-    if len(formats) == 1:
-        return formats.pop()
+    if len(set(formats)) == 1:
+        return formats[0]
     return None
 
 
 def _register_adapters() -> None:
     """Lazily register available adapters."""
-    # Will be populated as adapters are implemented in Phase 1c/1b
     try:
         from report_aggregator.adapters.cyclonedx import CycloneDXAdapter
 
@@ -53,6 +84,27 @@ def _register_adapters() -> None:
     except ImportError:
         pass
 
+    try:
+        from report_aggregator.adapters.dep5 import DEP5Adapter
+
+        _ADAPTER_REGISTRY["dep5"] = DEP5Adapter
+    except ImportError:
+        pass
+
+    try:
+        from report_aggregator.adapters.readmeoss import ReadMeOSSAdapter
+
+        _ADAPTER_REGISTRY["readmeoss"] = ReadMeOSSAdapter
+    except ImportError:
+        pass
+
+    try:
+        from report_aggregator.adapters.spdx3json import SPDX3JSONAdapter
+
+        _ADAPTER_REGISTRY["spdx3json"] = SPDX3JSONAdapter
+    except ImportError:
+        pass
+
 
 def main(argv: list[str] | None = None) -> int:
     """Main CLI entry point."""
@@ -62,7 +114,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
-    # merge subcommand
     merge_parser = subparsers.add_parser(
         "merge",
         help="Merge multiple reports into one",
@@ -82,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     merge_parser.add_argument(
         "--format",
-        choices=["cyclonedx", "spdx2tv"],
+        choices=["cyclonedx", "spdx2tv", "dep5", "readmeoss", "spdx3json"],
         default=None,
         help="Report format (auto-detected from extension if omitted)",
     )
@@ -105,13 +156,11 @@ def _handle_merge(args: argparse.Namespace) -> int:
     output_path: Path = args.output
     format_name: str | None = args.format
 
-    # Validate input files exist
     for p in input_paths:
         if not p.exists():
             print(f"Error: Input file not found: {p}", file=sys.stderr)
             return 1
 
-    # Auto-detect format if not specified
     if format_name is None:
         format_name = _detect_format(input_paths)
         if format_name is None:
@@ -122,14 +171,12 @@ def _handle_merge(args: argparse.Namespace) -> int:
             return 1
         print(f"Auto-detected format: {format_name}")
 
-    # Load mapping
     try:
         mapping = load_mapping(format_name)
     except MappingError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
-    # Check adapter availability
     _register_adapters()
     if format_name not in _ADAPTER_REGISTRY:
         print(
@@ -140,11 +187,9 @@ def _handle_merge(args: argparse.Namespace) -> int:
         )
         return 1
 
-    # Instantiate adapter and run merge
     adapter_cls = _ADAPTER_REGISTRY[format_name]
     adapter = adapter_cls(mapping)
 
-    # Import engine and run merge
     from report_aggregator.engine.merge import InputFile, merge_reports
 
     inputs = [
@@ -162,7 +207,6 @@ def _handle_merge(args: argparse.Namespace) -> int:
         print(f"Error during merge: {exc}", file=sys.stderr)
         return 1
 
-    # Write output
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_bytes(result.output_bytes)
     sidecar_path = result.provenance.write_sidecar(output_path)

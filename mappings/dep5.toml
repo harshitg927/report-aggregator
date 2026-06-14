@@ -1,0 +1,14 @@
+[dep5]
+category = "stanza"
+
+entries_path = "stanzas"
+license_text_path = "licenses"
+
+stanza_identity = "md5(license_expression + sorted_file_globs)"
+license_identity = "md5(normalized_text)"
+
+union_fields = ["files"]
+conflict_fields = ["copyright"]
+
+header_source = "primary"
+header_provenance_field = "Comment"

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from typing import Any
 
 
 # Matches whole SPDXRef-* / LicenseRef-* tokens, optionally input-namespaced.
@@ -133,6 +134,61 @@ def compute_spdx_checksum_identity(
     )
 
 
+def compute_spdx3_checksum_identity(
+    verified_using: list[dict[str, str]],
+    preferred_alg: str = "sha1",
+    fallback_algs: list[str] | None = None,
+) -> str:
+    """Resolve identity from SPDX 3 verifiedUsing[] hash objects.
+
+    FOSSology SPDX 3 JSON uses ``{type: "Hash", algorithm: "sha1", hashValue: "..."}``.
+    """
+    if fallback_algs is None:
+        fallback_algs = ["md5", "sha256"]
+
+    alg_map = {h["algorithm"].lower(): h["hashValue"] for h in verified_using}
+
+    for alg in [preferred_alg.lower()] + [a.lower() for a in fallback_algs]:
+        if alg in alg_map:
+            return normalize_checksum(alg_map[alg])
+
+    raise ValueError(
+        f"No recognized hash algorithm found in verifiedUsing. "
+        f"Expected one of: {[preferred_alg] + fallback_algs}"
+    )
+
+
+def compute_stanza_identity(license_expression: str, file_globs: list[str]) -> str:
+    """Compute DEP5 Files stanza identity per architecture §4.1."""
+    normalized_globs = sorted(g.strip() for g in file_globs if g.strip())
+    key = f"{license_expression.strip()}\0" + "\0".join(normalized_globs)
+    return hashlib.md5(key.encode("utf-8")).hexdigest()
+
+
+def strip_oselot_prefix(text: str) -> str:
+    """Strip OSSelot export prefix from ReadMeOSS license text when present."""
+    marker = "=== OSSelot Export ==="
+    if marker in text:
+        return text.split(marker, 1)[1].lstrip("\n")
+    return text
+
+
+def normalize_readmeoss_text(text: str) -> str:
+    """Normalize ReadMeOSS license block text before identity hashing."""
+    return normalize_text(strip_oselot_prefix(text))
+
+
+def rewrite_refs_in_structure(obj: Any, remap: dict[str, str]) -> Any:
+    """Recursively rewrite string values that exactly match keys in remap."""
+    if isinstance(obj, dict):
+        return {k: rewrite_refs_in_structure(v, remap) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [rewrite_refs_in_structure(item, remap) for item in obj]
+    if isinstance(obj, str) and obj in remap:
+        return remap[obj]
+    return obj
+
+
 def make_namespaced_ref(original_ref: str, input_index: int) -> str:
     """Create a namespaced version of a local ref to avoid cross-input collisions.
 
@@ -140,7 +196,16 @@ def make_namespaced_ref(original_ref: str, input_index: int) -> str:
         SPDXRef-upload2 → SPDXRef-input0-upload2
         SPDXRef-item32 → SPDXRef-input0-item32
         3-932 (bom-ref) → input0-3-932
+        https://.../File#SPDXRef-item932 → https://.../File#SPDXRef-input0-item932
     """
+    if "#" in original_ref:
+        base, fragment = original_ref.rsplit("#", 1)
+        if fragment.startswith("SPDXRef-"):
+            fragment = f"SPDXRef-input{input_index}-{fragment[8:]}"
+        else:
+            fragment = f"SPDXRef-input{input_index}-{fragment}"
+        return f"{base}#{fragment}"
+
     # SPDX refs: SPDXRef-{rest}
     spdx_match = re.match(r"^SPDXRef-(.+)$", original_ref)
     if spdx_match:

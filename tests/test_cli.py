@@ -13,11 +13,14 @@ class MockArgs:
 
 
 def test_detect_format():
-    """Test format detection from extension."""
-    assert _detect_format([Path("test.json")]) == "cyclonedx"
+    """Test format detection from extension, filename, and content."""
+    assert _detect_format([Path("CYCLONEDX_JSON_test.json")]) == "cyclonedx"
     assert _detect_format([Path("test.spdx")]) == "spdx2tv"
+    assert _detect_format([Path("DEP5_test.txt")]) == "dep5"
+    assert _detect_format([Path("ReadMe_OSS_test.txt")]) == "readmeoss"
+    assert _detect_format([Path("SPDX3JSON_test.json")]) == "spdx3json"
     assert _detect_format([Path("test.txt")]) is None
-    assert _detect_format([Path("test.json"), Path("test.spdx")]) is None # Mixed
+    assert _detect_format([Path("test.json"), Path("test.spdx")]) is None
 
 
 def test_cli_merge_cyclonedx(tmp_path: Path, cdxfckeditor_path: Path, cdxzlib_path: Path):

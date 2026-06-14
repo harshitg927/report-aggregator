@@ -23,7 +23,11 @@ from report_aggregator.engine.conflict import (
     merge_first_writer_field,
     merge_union_field,
 )
-from report_aggregator.engine.identity import make_namespaced_ref, rewrite_embedded_refs
+from report_aggregator.engine.identity import (
+    make_namespaced_ref,
+    rewrite_embedded_refs,
+    rewrite_refs_in_structure,
+)
 from report_aggregator.engine.mapping import MappingConfig
 from report_aggregator.engine.provenance import ProvenanceTracker
 
@@ -111,6 +115,16 @@ def merge_reports(
                         if loser_id:
                             license_alias_map[loser_id] = winner_id
 
+    # -- Step 3.5: Optional adapter-specific conflict detection (e.g. DEP5 glob overlap) --
+    if hasattr(adapter, "detect_conflicts"):
+        for conflict in adapter.detect_conflicts(all_entries):
+            provenance.record_conflict(
+                path=conflict.path,
+                values_by_source=conflict.values,
+                resolution=conflict.resolution,
+                chosen=conflict.chosen,
+            )
+
     # -- Step 4: Re-namespace local refs (graph formats only) --
     if mapping.category == "graph" and mapping.local_ref_field:
         # Redirect deduped-away license IDs to the surviving entry before namespacing
@@ -136,6 +150,10 @@ def merge_reports(
         for entry in merged_entries:
             if isinstance(entry.data, dict):
                 _rewrite_entry_refs(entry.data, mapping.local_ref_field, remap)
+                if "_satellites" in entry.data:
+                    entry.data["_satellites"] = rewrite_refs_in_structure(
+                        entry.data["_satellites"], remap
+                    )
 
     # -- Step 5: Provenance already recorded in Step 3 --
 
@@ -251,6 +269,13 @@ def _is_embeddable_ref(ref: str) -> bool:
     return ref.startswith("SPDXRef-") or ref.startswith("LicenseRef-")
 
 
+# Fields in graph documents that hold exact IRI references (SPDX 3 JSON).
+_IRI_REF_FIELDS = frozenset({
+    "subject", "from", "to", "creationInfo", "element",
+    "createdBy", "createdUsing",
+})
+
+
 def _rewrite_entry_refs(
     data: dict[str, Any],
     local_ref_field: str,
@@ -259,22 +284,31 @@ def _rewrite_entry_refs(
     """Rewrite all refs in an entry's data dict using the remap table.
 
     Handles:
-    - The top-level ref field (e.g. ``bom-ref``, ``SPDXID``) — exact match
+    - The top-level ref field (e.g. ``bom-ref``, ``SPDXID``, ``spdxId``) — exact match
+    - Common IRI reference fields (``subject``, ``from``, ``to``, etc.)
     - Embedded refs in string values (e.g. ``LicenseRef-*`` in license expressions)
     - Refs inside lists of strings (e.g. ``LicenseInfoInFile``)
 
-    Only refs that look like SPDX identifiers are replaced inside strings;
+    Only refs that look like SPDX identifiers are replaced inside arbitrary strings;
     short CDX bom-refs (e.g. ``"2"``) are only replaced as exact matches on
     the local_ref_field to avoid corrupting filenames and other data.
     """
-    # Build a filtered remap for embedded refs — only SPDX-style refs
     embeddable_remap = {k: v for k, v in remap.items() if _is_embeddable_ref(k)}
 
-    for key, value in data.items():
+    for key, value in list(data.items()):
+        if key.startswith("_"):
+            continue
         if key == local_ref_field and isinstance(value, str):
-            # Top-level ref field: exact match replacement
             if value in remap:
                 data[key] = remap[value]
+        elif key in _IRI_REF_FIELDS:
+            if isinstance(value, str) and value in remap:
+                data[key] = remap[value]
+            elif isinstance(value, list):
+                data[key] = [
+                    remap[item] if isinstance(item, str) and item in remap else item
+                    for item in value
+                ]
         elif isinstance(value, str):
             data[key] = _rewrite_string_refs(value, embeddable_remap)
         elif isinstance(value, list):
