@@ -1,0 +1,40 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Unit test / coverage reports
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Project specific
+tests/fixtures/
+*.provenance.json
+merged.json
+merged.spdx

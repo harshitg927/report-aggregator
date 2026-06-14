@@ -1,0 +1,21 @@
+[cyclonedx]
+category = "graph"
+spec_version = "1.4"
+
+# Two-tier model: uploads in metadata.component, files in components[]
+upload_entry_path = "metadata.component"
+entries_path = "components"
+
+# Identity: resolve from hashes[] array by alg field, lowercased hex
+upload_identity = ["hashes.SHA-1"]
+file_identity = ["hashes.SHA-1"]
+
+# Local refs: bom-ref only (no dependency graph in FOSSology CDX output)
+local_ref_field = "bom-ref"
+
+# Field merge policy
+union_fields = ["licenses", "hashes"]
+conflict_fields = ["copyright", "description", "name"]
+
+# v1: uploads promoted to components[] as type:library (flat model)
+output_model = "flat"

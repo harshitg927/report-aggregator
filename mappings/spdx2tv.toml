@@ -1,0 +1,23 @@
+[spdx2tv]
+category = "graph"
+
+# Entries: packages and files parsed from tag-value sections
+entries_path = "packages"
+
+# Identity: checksum SHA1, lowercased hex
+package_identity = ["checksum.SHA1"]
+file_identity = ["checksum.SHA1"]
+
+# Local refs: SPDXRef-* IDs that must be re-namespaced across inputs
+local_ref_field = "SPDXID"
+
+# Relationship graph to rewire after re-namespacing
+ref_graph_path = "relationships"
+
+# Field merge policy
+union_fields = ["LicenseInfoInFile", "externalRefs"]
+conflict_fields = ["PackageName", "PackageVersion", "PackageCopyrightText"]
+
+# License text blocks: dedup by md5(normalized text), last-writer naming
+license_text_path = "extractedLicensingInfo"
+license_text_naming = "last-writer"
