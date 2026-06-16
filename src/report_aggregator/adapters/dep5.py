@@ -16,6 +16,15 @@ _HEADER_FIELDS = frozenset({"Format", "Upstream-Name", "Disclaimer", "Comment"})
 _STANZA_FIELDS = frozenset({"Files", "Copyright", "License", "Comment"})
 
 
+def _dep5_continuation_line(line: str) -> str:
+    """Format a DEP5 continuation line, escaping leading dots per spec."""
+    if not line:
+        return " ."
+    if line.startswith("."):
+        return f" .{line}"
+    return f" {line}"
+
+
 def _parse_text_block(value: str, lines: list[str], start_index: int) -> tuple[str, int]:
     """Parse a <text>...</text> block that may span multiple lines."""
     if not value.startswith("<text>"):
@@ -64,7 +73,11 @@ class DEP5Adapter(FormatAdapter):
         self._primary_header: dict[str, str] | None = None
 
     def load(self, raw: bytes) -> dict[str, Any]:
-        text = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError as e:
+            raise ValueError(f"Invalid UTF-8 in DEP5 file: {e}") from e
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
         lines = text.split("\n")
 
         doc: dict[str, Any] = {"header": {}, "stanzas": [], "licenses": []}
@@ -103,6 +116,11 @@ class DEP5Adapter(FormatAdapter):
 
             i += 1
 
+        if not doc["stanzas"] and not doc["licenses"]:
+            raise ValueError(
+                "Empty DEP5 report: no Files stanzas or license paragraphs found"
+            )
+
         return doc
 
     def _parse_files_stanza(self, lines: list[str], start: int) -> tuple[dict[str, Any], int]:
@@ -136,6 +154,10 @@ class DEP5Adapter(FormatAdapter):
                     stanza[key] = val
                 i += 1
                 continue
+            if line.strip():
+                raise ValueError(
+                    f"Malformed DEP5 Files stanza at line {i + 1}: unrecognized field '{line.strip()}'"
+                )
             break
 
         return stanza, i
@@ -203,9 +225,11 @@ class DEP5Adapter(FormatAdapter):
         path_to_license: dict[str, tuple[str, str]] = {}
         conflicts: list[ConflictEntry] = []
 
-        for entry in all_entries:
-            if entry.kind != EntryKind.STANZA:
-                continue
+        stanzas = sorted(
+            (e for e in all_entries if e.kind == EntryKind.STANZA),
+            key=lambda e: e.source_id,
+        )
+        for entry in stanzas:
             license_expr = entry.data.get("license", "")
             for path in entry.data.get("files", []):
                 path = path.strip()
@@ -215,15 +239,21 @@ class DEP5Adapter(FormatAdapter):
                 if existing is None:
                     path_to_license[path] = (license_expr, entry.source_id)
                 elif existing[0] != license_expr:
+                    first_expr, first_source = existing
+                    if license_expr < first_expr or (
+                        license_expr == first_expr and entry.source_id < first_source
+                    ):
+                        chosen = license_expr
+                        values = {entry.source_id: license_expr, first_source: first_expr}
+                    else:
+                        chosen = first_expr
+                        values = {first_source: first_expr, entry.source_id: license_expr}
                     conflicts.append(
                         ConflictEntry(
                             path=f"/dep5/glob-overlap/{path}",
-                            values={
-                                existing[1]: existing[0],
-                                entry.source_id: license_expr,
-                            },
+                            values=values,
                             resolution="flagged",
-                            chosen=existing[0],
+                            chosen=chosen,
                         )
                     )
         return conflicts
@@ -251,7 +281,7 @@ class DEP5Adapter(FormatAdapter):
             if key == "Comment" and "\n" in val:
                 lines.append(f"Comment:  {val.split(chr(10))[0]}")
                 for part in val.split("\n")[1:]:
-                    lines.append(f" {part}" if part else " .")
+                    lines.append(_dep5_continuation_line(part))
             else:
                 lines.append(f"{key}: {val}")
 
@@ -274,7 +304,7 @@ class DEP5Adapter(FormatAdapter):
                     parts = comment.split("\n")
                     lines.append(f"Comment: {parts[0]}")
                     for part in parts[1:]:
-                        lines.append(f" {part}" if part else " .")
+                        lines.append(_dep5_continuation_line(part))
                 else:
                     lines.append(f"Comment: {comment}")
             lines.append("")
@@ -284,7 +314,7 @@ class DEP5Adapter(FormatAdapter):
             text = lic.get("text", "")
             if text:
                 for text_line in text.split("\n"):
-                    lines.append(f" {text_line}")
+                    lines.append(_dep5_continuation_line(text_line))
             lines.append("")
 
         output = "\n".join(lines)

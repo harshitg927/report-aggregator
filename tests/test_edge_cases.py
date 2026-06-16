@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 
 from report_aggregator.adapters.cyclonedx import CycloneDXAdapter
+from report_aggregator.adapters.dep5 import DEP5Adapter
+from report_aggregator.adapters.readmeoss import ReadMeOSSAdapter
 from report_aggregator.adapters.spdx2tv import SPDX2TVAdapter
 from report_aggregator.cli import _handle_merge
 from report_aggregator.engine.mapping import load_mapping
@@ -167,3 +169,72 @@ class TestProvenanceSidecar:
         assert len(restored.inputs) == 1
         assert restored.field_provenance["/pkg/id1"] == ["src1"]
         assert len(restored.conflicts) == 1
+
+
+class TestP4Validation:
+    def test_cyclonedx_duplicate_bom_ref(self, tmp_path: Path):
+        mapping = load_mapping("cyclonedx")
+        adapter = CycloneDXAdapter(mapping)
+        doc = {
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.4",
+            "metadata": {
+                "component": {
+                    "type": "library",
+                    "name": "pkg",
+                    "bom-ref": "dup",
+                    "hashes": [{"alg": "SHA-1", "content": "abc"}],
+                }
+            },
+            "components": [
+                {
+                    "type": "file",
+                    "name": "a.txt",
+                    "bom-ref": "dup",
+                    "hashes": [{"alg": "SHA-1", "content": "def"}],
+                }
+            ],
+        }
+        with pytest.raises(ValueError, match="Duplicate local refs"):
+            adapter.local_refs(doc)
+
+    def test_spdx2tv_empty_report(self, tmp_path: Path):
+        mapping = load_mapping("spdx2tv")
+        adapter = SPDX2TVAdapter(mapping)
+        raw = b"""SPDXVersion: SPDX-2.3
+DataLicense: CC0-1.0
+SPDXID: SPDXRef-DOCUMENT
+DocumentName: empty
+"""
+        with pytest.raises(ValueError, match="Empty SPDX report"):
+            adapter.load(raw)
+
+    def test_dep5_dot_escaped_license_line(self, tmp_path: Path):
+        mapping = load_mapping("dep5")
+        adapter = DEP5Adapter(mapping)
+        doc = {
+            "header": {"Format": "https://example.org/format/1.0/"},
+            "stanzas": [],
+            "licenses": [{"name": "MIT", "text": ".hidden line"}],
+        }
+        rendered = adapter.render(doc).decode()
+        assert " ..hidden line" in rendered
+
+    def test_readmeoss_short_separator(self, tmp_path: Path):
+        mapping = load_mapping("readmeoss")
+        adapter = ReadMeOSSAdapter(mapping)
+        raw = (
+            "===\n\n"
+            "pkg.zip\n\n"
+            "---\n\n"
+            "===\n\n"
+            " OTHER LICENSES \n\n"
+            "---\n\n"
+            "MIT\n\n"
+            "Permission granted.\n\n"
+            "---\n\n"
+            "<Copyright notices>\n\n"
+            "<notices>\n"
+        ).encode()
+        doc = adapter.load(raw)
+        assert len(doc["sections"][0]["blocks"]) == 1

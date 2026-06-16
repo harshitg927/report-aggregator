@@ -8,10 +8,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
-from report_aggregator.adapters.base import Entry, EntryKind, FormatAdapter
+from report_aggregator.adapters.base import Entry, EntryKind, FormatAdapter, validate_unique_local_refs
 from report_aggregator.engine.identity import (
     compute_spdx_checksum_identity,
     compute_text_identity,
+    entry_display_name,
     rewrite_embedded_refs,
 )
 from report_aggregator.engine.mapping import MappingConfig
@@ -131,14 +132,19 @@ class SPDX2TVAdapter(FormatAdapter):
                 
             # Parse based on key
             if key == "Relationship":
-                # Relationship: SPDXRef-DOCUMENT DESCRIBES SPDXRef-upload2
                 parts = val.split(" ")
-                if len(parts) >= 3:
-                    doc["relationships"].append({
-                        "spdxElementId": parts[0],
-                        "type": parts[1],
-                        "relatedSpdxElement": parts[2],
-                    })
+                if len(parts) < 3:
+                    raise ValueError(
+                        f"Malformed Relationship (expected element, type, and related element): {val}"
+                    )
+                rel = {
+                    "spdxElementId": parts[0],
+                    "type": parts[1],
+                    "relatedSpdxElement": parts[2],
+                }
+                doc["relationships"].append(rel)
+                if current_section == "package" and "_relationships" in current_item:
+                    current_item["_relationships"].append(rel)
             elif key == "PackageChecksum" or key == "FileChecksum":
                 parts = val.split(":", 1)
                 if len(parts) == 2:
@@ -164,14 +170,33 @@ class SPDX2TVAdapter(FormatAdapter):
                 
             i += 1
             
+        if not doc["packages"] and not doc["files"] and not doc["extracted_licensing_info"]:
+            raise ValueError(
+                "Empty SPDX report: no packages, files, or license blocks found"
+            )
+
         return doc
 
     def entries(self, doc: dict) -> Iterable[Entry]:
         """Normalize multi-package input into flat entries."""
+        all_relationships = doc.get("relationships", [])
+
         for p in doc.get("packages", []):
+            pkg_id = p.get("SPDXID")
+            if pkg_id:
+                p["_relationships"] = [
+                    r for r in all_relationships
+                    if r["spdxElementId"] == pkg_id or r["relatedSpdxElement"] == pkg_id
+                ]
             yield Entry(data=p, kind=EntryKind.PACKAGE, source_id="")
             
         for f in doc.get("files", []):
+            file_id = f.get("SPDXID")
+            if file_id:
+                f["_relationships"] = [
+                    r for r in all_relationships
+                    if r["spdxElementId"] == file_id or r["relatedSpdxElement"] == file_id
+                ]
             yield Entry(data=f, kind=EntryKind.FILE, source_id="")
             
         for lic in doc.get("extracted_licensing_info", []):
@@ -181,7 +206,14 @@ class SPDX2TVAdapter(FormatAdapter):
         """Resolve identity from checksums or text hash."""
         if entry.kind in (EntryKind.PACKAGE, EntryKind.FILE):
             checksums = entry.data.get("checksums", {})
-            return compute_spdx_checksum_identity(checksums, preferred="SHA1")
+            if not checksums:
+                name = entry_display_name(entry.data)
+                raise ValueError(
+                    f"Cannot compute identity for {entry.kind.value} '{name}': "
+                    f"no hashes/checksums present"
+                )
+            context = f"{entry.kind.value} '{entry_display_name(entry.data)}'"
+            return compute_spdx_checksum_identity(checksums, preferred="SHA1", context=context)
         elif entry.kind == EntryKind.LICENSE_TEXT:
             text = entry.data.get("ExtractedText", "")
             return compute_text_identity(text)
@@ -206,6 +238,7 @@ class SPDX2TVAdapter(FormatAdapter):
             if "LicenseID" in lic:
                 refs.append(lic["LicenseID"])
                 
+        validate_unique_local_refs(refs)
         return refs
 
     def rewrite_refs(self, doc: dict, remap: dict[str, str]) -> None:
@@ -279,13 +312,18 @@ class SPDX2TVAdapter(FormatAdapter):
             elif e.kind == EntryKind.FILE:
                 out_doc["files"].append(e.data)
             elif e.kind == EntryKind.LICENSE_TEXT:
-                # Based on the user's decision, we keep the last writer's name for LicenseRef.
-                # The engine already keeps the first writer's data if we use FIRST_WRITER,
-                # but we want the NEWEST name. Since we just use FIRST_WRITER for the whole block
-                # this will naturally just keep whatever name won the conflict.
-                # We can enforce last-writer in the conflict engine later if needed, but for now
-                # first-writer is fine as long as we deduplicate correctly.
                 out_doc["extracted_licensing_info"].append(e.data)
+
+        # Preserve inter-package and file relationships from merged entries
+        seen_rels: set[tuple[str, str, str]] = set()
+        for e in entries:
+            if not isinstance(e.data, dict):
+                continue
+            for rel in e.data.get("_relationships", []):
+                key = (rel["spdxElementId"], rel["type"], rel["relatedSpdxElement"])
+                if key not in seen_rels and rel["type"] != "DESCRIBES":
+                    seen_rels.add(key)
+                    out_doc["relationships"].append(rel)
         
         # Recalculate PackageVerificationCode for each package (SPDX 2.3 §7.10)
         for pkg in out_doc["packages"]:

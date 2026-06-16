@@ -131,11 +131,11 @@ def test_spdx2tv_no_dangling_license_refs(spdx2fckeditor_path: Path, spdx2zlib_p
     assert not missing, f"Dangling LicenseRef IDs: {sorted(missing)}"
 
     ghost_ids = {
-        "input1-LicenseRef-fossology-Zlib-possibility",
-        "input1-LicenseRef-fossology-See-doc.OTHER",
-        "input1-LicenseRef-fossology-See-file.LICENSE",
-        "input1-LicenseRef-fossology-MIT-CMU-style",
-        "input1-LicenseRef-fossology-Perl-possibility",
+        "input0-LicenseRef-fossology-Zlib-possibility",
+        "input0-LicenseRef-fossology-See-doc.OTHER",
+        "input0-LicenseRef-fossology-See-file.LICENSE",
+        "input0-LicenseRef-fossology-MIT-CMU-style",
+        "input0-LicenseRef-fossology-Perl-possibility",
     }
     assert not (referenced & ghost_ids)
 

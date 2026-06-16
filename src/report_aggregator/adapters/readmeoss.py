@@ -12,16 +12,13 @@ from report_aggregator.engine.mapping import MappingConfig
 _MAJOR_SEP = "=" * 120
 _MINOR_SEP = "-" * 120
 _SECTION_NAMES = ("MAIN LICENSES", "OTHER LICENSES", "ACKNOWLEDGEMENTS")
+_DEFAULT_MIN_SEPARATOR_LENGTH = 3
 
 
-def _is_major_separator(line: str) -> bool:
+def _is_separator_line(line: str, char: str, min_len: int) -> bool:
+    """Return True if line is a separator made of repeated char."""
     stripped = line.strip()
-    return len(stripped) >= 20 and set(stripped) == {"="}
-
-
-def _is_minor_separator(line: str) -> bool:
-    stripped = line.strip()
-    return len(stripped) >= 20 and set(stripped) == {"-"}
+    return len(stripped) >= min_len and set(stripped) == {char}
 
 
 def _is_footer_marker(line: str) -> bool:
@@ -35,26 +32,70 @@ class ReadMeOSSAdapter(FormatAdapter):
     def __init__(self, mapping: MappingConfig):
         self.mapping = mapping
         self._primary_doc: dict[str, Any] | None = None
+        self._min_sep_len = int(
+            mapping.raw.get("min_separator_length", _DEFAULT_MIN_SEPARATOR_LENGTH)
+        )
+
+    def _is_major_separator(self, line: str) -> bool:
+        return _is_separator_line(line, "=", self._min_sep_len)
+
+    def _is_minor_separator(self, line: str) -> bool:
+        return _is_separator_line(line, "-", self._min_sep_len)
 
     def _parse_footer(self, lines: list[str], start: int) -> tuple[dict[str, str], int]:
-        footer = {"copyright_notices": "<Copyright notices>", "notices": "<notices>"}
+        footer: dict[str, str] = {"copyright_notices": "", "notices": ""}
         i = start
-        if i < len(lines) and _is_minor_separator(lines[i]):
+        if i < len(lines) and self._is_minor_separator(lines[i]):
             i += 1
         while i < len(lines) and not lines[i].strip():
             i += 1
-        if i < len(lines) and _is_footer_marker(lines[i]):
-            footer["copyright_notices"] = lines[i].strip()
-            i += 1
-        while i < len(lines) and not lines[i].strip():
-            i += 1
-        if i < len(lines) and _is_footer_marker(lines[i]):
-            footer["notices"] = lines[i].strip()
-            i += 1
+
+        current_section: str | None = None
+        section_lines: list[str] = []
+
+        while i < len(lines):
+            line = lines[i]
+            stripped = line.strip()
+            if stripped == "<Copyright notices>":
+                if current_section and section_lines:
+                    footer[current_section] = "\n".join(section_lines).strip()
+                elif current_section == "copyright_notices":
+                    footer["copyright_notices"] = "<Copyright notices>"
+                current_section = "copyright_notices"
+                section_lines = []
+                i += 1
+                continue
+            if stripped == "<notices>":
+                if current_section == "copyright_notices":
+                    content = "\n".join(section_lines).strip()
+                    footer["copyright_notices"] = content if content else "<Copyright notices>"
+                elif current_section and section_lines:
+                    footer[current_section] = "\n".join(section_lines).strip()
+                current_section = "notices"
+                section_lines = []
+                i += 1
+                continue
+            if current_section is not None:
+                section_lines.append(line.rstrip())
+                i += 1
+                continue
+            break
+
+        if current_section and section_lines:
+            footer[current_section] = "\n".join(section_lines).strip()
+        elif current_section == "copyright_notices":
+            footer["copyright_notices"] = "<Copyright notices>"
+        elif current_section == "notices":
+            footer["notices"] = "<notices>"
+
         return footer, i
 
     def load(self, raw: bytes) -> dict[str, Any]:
-        text = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError as e:
+            raise ValueError(f"Invalid UTF-8 in ReadMeOSS file: {e}") from e
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
         lines = text.split("\n")
 
         doc: dict[str, Any] = {
@@ -64,14 +105,14 @@ class ReadMeOSSAdapter(FormatAdapter):
         }
 
         i = 0
-        while i < len(lines) and not _is_major_separator(lines[i]):
+        while i < len(lines) and not self._is_major_separator(lines[i]):
             i += 1
         if i < len(lines):
             i += 1
 
         while i < len(lines) and not lines[i].strip():
             i += 1
-        if i < len(lines) and not _is_minor_separator(lines[i]):
+        if i < len(lines) and not self._is_minor_separator(lines[i]):
             doc["header"]["package_name"] = lines[i].strip()
             i += 1
 
@@ -80,7 +121,7 @@ class ReadMeOSSAdapter(FormatAdapter):
                 doc["footer"], i = self._parse_footer(lines, i)
                 break
 
-            if not _is_major_separator(lines[i]):
+            if not self._is_major_separator(lines[i]):
                 i += 1
                 continue
 
@@ -92,7 +133,7 @@ class ReadMeOSSAdapter(FormatAdapter):
 
             section_name = lines[i].strip()
             i += 1
-            while i < len(lines) and not _is_minor_separator(lines[i]):
+            while i < len(lines) and not self._is_minor_separator(lines[i]):
                 i += 1
             if i < len(lines):
                 i += 1
@@ -104,33 +145,34 @@ class ReadMeOSSAdapter(FormatAdapter):
                     doc["footer"], i = self._parse_footer(lines, i)
                     if section["blocks"]:
                         doc["sections"].append(section)
+                    self._validate_non_empty(doc)
                     return doc
 
-                if _is_major_separator(lines[i]):
+                if self._is_major_separator(lines[i]):
                     break
 
                 while i < len(lines) and not lines[i].strip():
                     i += 1
-                if i >= len(lines) or _is_major_separator(lines[i]) or _is_footer_marker(lines[i]):
+                if i >= len(lines) or self._is_major_separator(lines[i]) or _is_footer_marker(lines[i]):
                     break
 
                 if first_block:
                     first_block = False
                 else:
-                    if not _is_minor_separator(lines[i]):
+                    if not self._is_minor_separator(lines[i]):
                         i += 1
                         continue
                     i += 1
                     while i < len(lines) and not lines[i].strip():
                         i += 1
-                    if i >= len(lines) or _is_major_separator(lines[i]) or _is_footer_marker(lines[i]):
+                    if i >= len(lines) or self._is_major_separator(lines[i]) or _is_footer_marker(lines[i]):
                         break
 
                 block_name = lines[i].strip()
                 i += 1
                 text_lines: list[str] = []
                 while i < len(lines):
-                    if _is_minor_separator(lines[i]) or _is_major_separator(lines[i]):
+                    if self._is_minor_separator(lines[i]) or self._is_major_separator(lines[i]):
                         break
                     if _is_footer_marker(lines[i]):
                         break
@@ -144,7 +186,15 @@ class ReadMeOSSAdapter(FormatAdapter):
             if section["blocks"] or section_name in _SECTION_NAMES:
                 doc["sections"].append(section)
 
+        self._validate_non_empty(doc)
         return doc
+
+    @staticmethod
+    def _validate_non_empty(doc: dict[str, Any]) -> None:
+        if not doc.get("sections") or not any(
+            section.get("blocks") for section in doc["sections"]
+        ):
+            raise ValueError("Empty ReadMeOSS report: no license sections found")
 
     def entries(self, doc: dict[str, Any]) -> Iterable[Entry]:
         if self._primary_doc is None:
@@ -226,10 +276,26 @@ class ReadMeOSSAdapter(FormatAdapter):
         footer = doc.get("footer", {})
         lines.append(_MINOR_SEP)
         lines.append("")
-        lines.append(footer.get("copyright_notices", "<Copyright notices>"))
+        copyright_text = footer.get("copyright_notices", "")
+        if copyright_text:
+            if copyright_text == "<Copyright notices>":
+                lines.append("<Copyright notices>")
+            else:
+                lines.append("<Copyright notices>")
+                lines.extend(copyright_text.split("\n"))
+        else:
+            lines.append("<Copyright notices>")
         lines.append("")
-        lines.append(footer.get("notices", "<notices>"))
-        if not footer.get("notices"):
+        notices_text = footer.get("notices", "")
+        if notices_text:
+            if notices_text == "<notices>":
+                lines.append("<notices>")
+            else:
+                lines.append("<notices>")
+                lines.extend(notices_text.split("\n"))
+        else:
+            lines.append("<notices>")
+        if not notices_text or notices_text == "<notices>":
             lines.append("")
 
         return "\n".join(lines).encode("utf-8")

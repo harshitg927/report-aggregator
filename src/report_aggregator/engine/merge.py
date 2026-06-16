@@ -79,6 +79,7 @@ def merge_reports(
         )
 
     # -- Step 1: Collect entries from all inputs --
+    source_order = {inp.source_id: inp.input_index for inp in inputs}
     all_entries: list[Entry] = []
     for inp, doc in loaded_docs:
         for entry in adapter.entries(doc):
@@ -91,6 +92,13 @@ def merge_reports(
                     f"missing required checksums/hashes"
                 )
             all_entries.append(entry)
+
+    if not all_entries:
+        paths = ", ".join(str(inp.path) for inp in inputs)
+        raise ValueError(
+            f"No mergeable entries found in input report(s): {paths}. "
+            f"All inputs appear empty or contain no recognizable entries."
+        )
 
     # -- Step 2: Group by identity --
     buckets: dict[str, list[Entry]] = defaultdict(list)
@@ -110,15 +118,20 @@ def merge_reports(
             )
             merged_entries.append(entry)
         else:
-            # Duplicate — merge fields
-            merged = _merge_bucket(bucket, mapping, provenance)
+            sorted_bucket = sorted(
+                bucket,
+                key=lambda e: source_order.get(e.source_id, 999),
+            )
+            merged = _merge_bucket(sorted_bucket, mapping, provenance)
             merged_entries.append(merged)
             if bucket[0].kind == EntryKind.LICENSE_TEXT:
-                winner_id = _license_id(bucket[0])
+                if mapping.raw.get("license_text_naming") == "last-writer":
+                    _apply_last_writer_license_name(merged, sorted_bucket)
+                winner_id = _license_id(merged)
                 if winner_id:
-                    for entry in bucket[1:]:
+                    for entry in sorted_bucket:
                         loser_id = _license_id(entry)
-                        if loser_id:
+                        if loser_id and loser_id != winner_id:
                             license_alias_map[loser_id] = winner_id
 
     # -- Step 3.5: Optional adapter-specific conflict detection (e.g. DEP5 glob overlap) --
@@ -170,6 +183,12 @@ def merge_reports(
             for inp in inputs
         ],
     }
+    if loaded_docs:
+        _, first_doc = loaded_docs[0]
+        if isinstance(first_doc, dict) and "_metadata_snapshot" in first_doc:
+            metadata["primary_metadata"] = first_doc["_metadata_snapshot"]
+        if isinstance(first_doc, dict) and "_primary_meta" in first_doc:
+            metadata["primary_meta"] = first_doc["_primary_meta"]
     assembled_doc = adapter.assemble(merged_entries, metadata)
     output_bytes = adapter.render(assembled_doc)
 
@@ -261,8 +280,25 @@ def _license_id(entry: Entry) -> str | None:
     """Return LicenseID from a license-text entry, if present."""
     if not isinstance(entry.data, dict):
         return None
-    license_id = entry.data.get("LicenseID")
-    return license_id if isinstance(license_id, str) else None
+    for key in ("LicenseID", "spdxId", "name"):
+        license_id = entry.data.get(key)
+        if isinstance(license_id, str) and license_id:
+            return license_id
+    return None
+
+
+def _apply_last_writer_license_name(merged: Entry, bucket: list[Entry]) -> None:
+    """Apply last-writer naming policy for deduplicated license text blocks."""
+    if not isinstance(merged.data, dict):
+        return
+    last = bucket[-1].data
+    if not isinstance(last, dict):
+        return
+    for key in ("LicenseID", "spdxId", "name"):
+        val = last.get(key)
+        if isinstance(val, str) and val:
+            merged.data[key] = val
+            return
 
 
 def _is_embeddable_ref(ref: str) -> bool:
@@ -280,6 +316,21 @@ _IRI_REF_FIELDS = frozenset({
     "subject", "from", "to", "creationInfo", "element",
     "createdBy", "createdUsing",
 })
+
+
+def _rewrite_iri_value(value: str, remap: dict[str, str]) -> str:
+    """Rewrite an IRI reference, including fragment-only matches."""
+    if value in remap:
+        return remap[value]
+    if "#" in value:
+        base, fragment = value.rsplit("#", 1)
+        if fragment in remap:
+            target = remap[fragment]
+            return target if target.startswith(("http", "urn:")) else f"{base}#{target}"
+        prefixed = f"{base}#{fragment}"
+        if prefixed in remap:
+            return remap[prefixed]
+    return value
 
 
 def _rewrite_entry_refs(
@@ -305,14 +356,13 @@ def _rewrite_entry_refs(
         if key.startswith("_"):
             continue
         if key == local_ref_field and isinstance(value, str):
-            if value in remap:
-                data[key] = remap[value]
+            data[key] = _rewrite_iri_value(value, remap)
         elif key in _IRI_REF_FIELDS:
-            if isinstance(value, str) and value in remap:
-                data[key] = remap[value]
+            if isinstance(value, str):
+                data[key] = _rewrite_iri_value(value, remap)
             elif isinstance(value, list):
                 data[key] = [
-                    remap[item] if isinstance(item, str) and item in remap else item
+                    _rewrite_iri_value(item, remap) if isinstance(item, str) else item
                     for item in value
                 ]
         elif isinstance(value, str):

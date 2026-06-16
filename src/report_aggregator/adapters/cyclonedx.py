@@ -8,8 +8,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
-from report_aggregator.adapters.base import Entry, EntryKind, FormatAdapter
-from report_aggregator.engine.identity import compute_checksum_identity
+from report_aggregator.adapters.base import Entry, EntryKind, FormatAdapter, validate_unique_local_refs
+from report_aggregator.engine.identity import compute_checksum_identity, entry_display_name
 from report_aggregator.engine.mapping import MappingConfig
 
 
@@ -23,12 +23,9 @@ class CycloneDXAdapter(FormatAdapter):
 
     def __init__(self, mapping: MappingConfig):
         self.mapping = mapping
-        # Will cache original metadata structure to retain FOSSology tools list
-        self._first_metadata = None
 
     def load(self, raw: bytes) -> dict:
         """Parse CDX JSON and validate format."""
-        self._first_metadata = None
         try:
             doc = json.loads(raw)
         except json.JSONDecodeError as e:
@@ -40,27 +37,59 @@ class CycloneDXAdapter(FormatAdapter):
         spec = doc.get("specVersion")
         if spec != self.mapping.raw.get("spec_version", "1.4"):
             raise ValueError(f"Unsupported CycloneDX version. Expected 1.4, got: {spec}")
-            
+
+        if "metadata" in doc:
+            doc["_metadata_snapshot"] = copy.deepcopy(doc["metadata"])
+
+        self._validate_components(doc)
+        if not doc.get("metadata", {}).get("component") and not doc.get("components"):
+            raise ValueError("Empty CycloneDX report: no components found")
+
         return doc
+
+    def _validate_components(self, doc: dict) -> None:
+        """Ensure each component has required CycloneDX fields."""
+        metadata_comp = doc.get("metadata", {}).get("component")
+        if metadata_comp:
+            self._validate_component(metadata_comp, "metadata.component")
+        for idx, comp in enumerate(doc.get("components", [])):
+            self._validate_component(comp, f"components[{idx}]")
+
+    @staticmethod
+    def _validate_component(comp: dict, location: str) -> None:
+        if not comp.get("name"):
+            raise ValueError(
+                f"CycloneDX component at {location} missing required field 'name'"
+            )
+        if not comp.get("type"):
+            raise ValueError(
+                f"CycloneDX component at {location} missing required field 'type'"
+            )
 
     def entries(self, doc: dict) -> Iterable[Entry]:
         """Extract upload (metadata.component) and files (components[])."""
-        # Save first metadata seen for tools assembly later
-        if self._first_metadata is None and "metadata" in doc:
-            self._first_metadata = copy.deepcopy(doc["metadata"])
-
         metadata_comp = doc.get("metadata", {}).get("component")
+        upload_ref = metadata_comp.get("bom-ref") if metadata_comp else None
+
         if metadata_comp:
-            # Upload component -> PACKAGE kind
             yield Entry(data=metadata_comp, kind=EntryKind.PACKAGE, source_id="")
             
         for file_comp in doc.get("components", []):
+            if upload_ref and isinstance(file_comp, dict):
+                file_comp["_upload_bom_ref"] = upload_ref
             yield Entry(data=file_comp, kind=EntryKind.FILE, source_id="")
 
     def identity(self, entry: Entry) -> str:
         """Resolve identity from hashes array."""
         hashes = entry.data.get("hashes", [])
-        return compute_checksum_identity(hashes, preferred_alg="SHA-1")
+        if not hashes:
+            name = entry_display_name(entry.data)
+            raise ValueError(
+                f"Cannot compute identity for {entry.kind.value} '{name}': "
+                f"no hashes/checksums present"
+            )
+        context = f"{entry.kind.value} '{entry_display_name(entry.data)}'"
+        return compute_checksum_identity(hashes, preferred_alg="SHA-1", context=context)
 
     def local_refs(self, doc: dict) -> list[str]:
         """Collect bom-ref values to prevent cross-input collisions."""
@@ -72,6 +101,7 @@ class CycloneDXAdapter(FormatAdapter):
         for comp in doc.get("components", []):
             if "bom-ref" in comp:
                 refs.append(comp["bom-ref"])
+        validate_unique_local_refs(refs)
         return refs
 
     def rewrite_refs(self, doc: dict, remap: dict[str, str]) -> None:
@@ -88,8 +118,9 @@ class CycloneDXAdapter(FormatAdapter):
 
     def assemble(self, entries: list[Entry], metadata: dict) -> dict:
         """Assemble the flat output document."""
-        # Use cached metadata or create skeleton
-        out_metadata = self._first_metadata or {"tools": []}
+        out_metadata = copy.deepcopy(
+            metadata.get("primary_metadata") or {"tools": []}
+        )
         
         # New timestamp and SN
         out_metadata["timestamp"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -115,11 +146,17 @@ class CycloneDXAdapter(FormatAdapter):
         }
         
         for entry in entries:
-            comp_data = entry.data
+            comp_data = dict(entry.data)
+            upload_ref = comp_data.pop("_upload_bom_ref", None)
             
             # If this is an upload, we promote it to components array as type:library
             if entry.kind == EntryKind.PACKAGE:
                 comp_data["type"] = "library"
+            elif upload_ref:
+                comp_data.setdefault("properties", []).append({
+                    "name": "report-aggregator:upload-bom-ref",
+                    "value": upload_ref,
+                })
                 
             out_doc["components"].append(comp_data)
             

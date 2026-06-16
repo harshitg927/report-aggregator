@@ -39,11 +39,11 @@ class TestMergeUnionField:
         merged, sources = merge_union_field(values)
         assert len(merged) == 1  # Same dict, deduplicated
 
-    def test_union_preserves_order(self):
-        """First-seen order is preserved in union output."""
+    def test_union_deterministic_order(self):
+        """Union output is sorted for deterministic merge results."""
         values = [(["C", "A"], "src1"), (["B", "A"], "src2")]
         merged, _ = merge_union_field(values)
-        assert merged == ["C", "A", "B"]
+        assert merged == ["A", "B", "C"]
 
     def test_union_empty(self):
         """Empty input returns empty list."""
@@ -92,6 +92,13 @@ class TestMergeConflictField:
         assert len(conflict.values) == 2
         assert "src1" in conflict.values
         assert "src1#2" in conflict.values
+
+    def test_all_agree_dedupes_source_ids(self):
+        """Agreeing values from the same source appear once in provenance."""
+        values = [("foo", "src1"), ("foo", "src1"), ("foo", "src2")]
+        _, sources, conflict = merge_conflict_field("/test/field", values)
+        assert conflict is None
+        assert sources == ["src1", "src2"]
 
     def test_empty_input(self):
         """Empty input returns None for all."""

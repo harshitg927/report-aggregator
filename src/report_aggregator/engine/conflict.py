@@ -62,6 +62,8 @@ def merge_union_field(
         if source_id not in all_sources:
             all_sources.append(source_id)
 
+    seen.sort(key=_stable_key)
+    all_sources.sort()
     return seen, all_sources
 
 
@@ -73,13 +75,6 @@ def merge_conflict_field(
 
     If all inputs agree, keeps the value. If they disagree,
     applies first-writer policy and produces a conflict entry.
-
-    Args:
-        field_path: JSON Pointer path for provenance/conflict recording.
-        values_with_sources: List of (value, source_id) pairs.
-
-    Returns:
-        Tuple of (chosen_value, source_ids, optional_conflict_entry).
     """
     if not values_with_sources:
         return None, [], None
@@ -87,14 +82,12 @@ def merge_conflict_field(
     # Check if all values agree
     first_value, first_source = values_with_sources[0]
     all_agree = all(_values_equal(v, first_value) for v, _ in values_with_sources)
-    all_sources = [s for _, s in values_with_sources]
+    all_sources = list(dict.fromkeys(s for _, s in values_with_sources))
 
     if all_agree:
         return first_value, all_sources, None
 
     # Disagreement — first-writer wins
-    # Build values_by_source carefully: when the same source_id appears
-    # multiple times (intra-report SHA1 collision), suffix with index
     values_by_source: dict[str, Any] = {}
     for val, src in values_with_sources:
         key = src
@@ -115,14 +108,7 @@ def merge_conflict_field(
 def merge_first_writer_field(
     values_with_sources: list[tuple[Any, str]],
 ) -> tuple[Any, list[str]]:
-    """First-writer-wins merge: keeps the first input's value.
-
-    Args:
-        values_with_sources: List of (value, source_id) pairs.
-
-    Returns:
-        Tuple of (chosen_value, source_ids).
-    """
+    """First-writer-wins merge: keeps the first input's value."""
     if not values_with_sources:
         return None, []
     first_value, first_source = values_with_sources[0]

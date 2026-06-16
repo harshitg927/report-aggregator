@@ -13,6 +13,21 @@ from enum import Enum
 from typing import Any, Iterable, Protocol
 
 
+def validate_unique_local_refs(refs: list[str], *, context: str = "") -> None:
+    """Raise if a document contains duplicate local reference IDs."""
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for ref in refs:
+        if ref in seen:
+            duplicates.add(ref)
+        seen.add(ref)
+    if duplicates:
+        prefix = f"{context}: " if context else ""
+        raise ValueError(
+            f"{prefix}Duplicate local refs: {sorted(duplicates)}"
+        )
+
+
 class EntryKind(Enum):
     """Discriminator for the type of mergeable entry."""
 

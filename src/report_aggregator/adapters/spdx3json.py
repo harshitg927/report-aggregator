@@ -12,6 +12,7 @@ from report_aggregator.adapters.base import Entry, EntryKind, FormatAdapter
 from report_aggregator.engine.identity import (
     compute_spdx3_checksum_identity,
     compute_text_identity,
+    entry_display_name,
     rewrite_refs_in_structure,
 )
 from report_aggregator.engine.mapping import MappingConfig
@@ -29,7 +30,10 @@ _META_NODE_TYPES = frozenset({
 
 def _sanitize_json_text(raw: bytes) -> str:
     """Prepare FOSSology SPDX3 JSON for stdlib parsing."""
-    text = raw.decode("utf-8")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise ValueError(f"Invalid UTF-8 in SPDX 3 JSON file: {e}") from e
     return text.replace("\t", " ")
 
 
@@ -44,7 +48,6 @@ class SPDX3JSONAdapter(FormatAdapter):
 
     def __init__(self, mapping: MappingConfig):
         self.mapping = mapping
-        self._primary_meta: dict[str, Any] = {}
 
     def load(self, raw: bytes) -> dict[str, Any]:
         try:
@@ -53,12 +56,35 @@ class SPDX3JSONAdapter(FormatAdapter):
             raise ValueError(f"Invalid JSON in SPDX 3 file: {e}") from e
         if not isinstance(nodes, list):
             raise ValueError("SPDX 3 JSON must be a top-level array of nodes")
+        if not nodes:
+            raise ValueError("Empty SPDX 3 JSON report: no nodes found")
 
         by_id: dict[str, dict[str, Any]] = {}
-        for node in nodes:
+        primary_meta: dict[str, Any] = {}
+        entry_count = 0
+        for i, node in enumerate(nodes):
+            node_type = node.get("type")
+            if not node_type:
+                node_id = node.get("spdxId") or node.get("@id") or f"index {i}"
+                raise ValueError(
+                    f"SPDX 3 node missing required 'type' field: {node_id}"
+                )
             node_id = node.get("spdxId") or node.get("@id")
-            if node_id:
-                by_id[node_id] = node
+            if node_type in _ENTRY_NODE_TYPES:
+                entry_count += 1
+                if node_id:
+                    if node_id in by_id:
+                        raise ValueError(f"Duplicate SPDX 3 entry node ID: {node_id}")
+                    by_id[node_id] = node
+            elif node_id:
+                by_id.setdefault(node_id, node)
+            if node_type in _META_NODE_TYPES and node_type not in primary_meta:
+                primary_meta[node_type] = copy.deepcopy(node)
+
+        if entry_count == 0:
+            raise ValueError(
+                "Empty SPDX 3 JSON report: no package, file, or license nodes found"
+            )
 
         # Pre-index satellites by subject for O(1) lookup instead of O(N)
         satellites_by_subject: dict[str, list[dict]] = {}
@@ -78,7 +104,12 @@ class SPDX3JSONAdapter(FormatAdapter):
                 prefix = node_id.rsplit("#", 1)[0]
                 satellites_by_subject.setdefault(prefix + "#", []).append(node)
 
-        return {"nodes": nodes, "by_id": by_id, "satellites_by_subject": satellites_by_subject}
+        return {
+            "nodes": nodes,
+            "by_id": by_id,
+            "satellites_by_subject": satellites_by_subject,
+            "_primary_meta": primary_meta,
+        }
 
     def _collect_satellites(self, doc: dict[str, Any], subject_id: str) -> list[dict[str, Any]]:
         """Collect satellite nodes for a given subject ID.
@@ -92,14 +123,8 @@ class SPDX3JSONAdapter(FormatAdapter):
         return satellites
 
     def entries(self, doc: dict[str, Any]) -> Iterable[Entry]:
-        if not self._primary_meta:
-            for node in doc["nodes"]:
-                node_type = node.get("type", "")
-                if node_type in _META_NODE_TYPES:
-                    self._primary_meta[node_type] = copy.deepcopy(node)
-
         for node in doc["nodes"]:
-            node_type = node.get("type", "")
+            node_type = node.get("type")
             if node_type == _PACKAGE_TYPE:
                 data = node
                 data["_satellites"] = self._collect_satellites(doc, node["spdxId"])
@@ -114,7 +139,14 @@ class SPDX3JSONAdapter(FormatAdapter):
     def identity(self, entry: Entry) -> str:
         if entry.kind in (EntryKind.PACKAGE, EntryKind.FILE):
             verified = entry.data.get("verifiedUsing", [])
-            return compute_spdx3_checksum_identity(verified)
+            if not verified:
+                name = entry_display_name(entry.data)
+                raise ValueError(
+                    f"Cannot compute identity for {entry.kind.value} '{name}': "
+                    f"no hashes/checksums present"
+                )
+            context = f"{entry.kind.value} '{entry_display_name(entry.data)}'"
+            return compute_spdx3_checksum_identity(verified, context=context)
         if entry.kind == EntryKind.LICENSE_TEXT:
             text = entry.data.get("simplelicensing_licenseText", "")
             return compute_text_identity(_extract_text_from_spdx_field(text))
@@ -155,7 +187,9 @@ class SPDX3JSONAdapter(FormatAdapter):
         relationships: list[dict[str, Any]] = []
         seen_ids: set[str] = set()
 
-        namespace = f"http://report-aggregator/spdx3/{uuid.uuid4()}.json"
+        primary_meta = metadata.get("primary_meta") or {}
+        namespace_map = primary_meta.get("NamespaceMap", {})
+        namespace = namespace_map.get("namespace") or f"http://report-aggregator/spdx3/{uuid.uuid4()}.json"
         creation_info_id = f"{namespace}#creationInfo1"
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -165,7 +199,7 @@ class SPDX3JSONAdapter(FormatAdapter):
             "prefix": "URI",
         })
 
-        primary_creation = self._primary_meta.get("CreationInfo", {})
+        primary_creation = primary_meta.get("CreationInfo", {})
         output_nodes.append({
             "@id": creation_info_id,
             "type": "CreationInfo",
@@ -177,8 +211,8 @@ class SPDX3JSONAdapter(FormatAdapter):
         })
 
         for node_type in ("Tool", "Person"):
-            if node_type in self._primary_meta:
-                meta_node = copy.deepcopy(self._primary_meta[node_type])
+            if node_type in primary_meta:
+                meta_node = copy.deepcopy(primary_meta[node_type])
                 meta_node.pop("@id", None)
                 output_nodes.append(meta_node)
                 spdx_id = meta_node.get("spdxId")
@@ -217,7 +251,7 @@ class SPDX3JSONAdapter(FormatAdapter):
                 if sat_id:
                     seen_ids.add(sat_id)
 
-        document_id = "https://spdx.org/rdf/3.0.0/terms/Core/SpdxDocument#SpdxRef-DOCUMENT"
+        document_id = f"{namespace}#SpdxRef-DOCUMENT"
         doc_name = packages[0].get("name", "Merged Report") if packages else "Merged Report"
         output_nodes.append({
             "type": "SpdxDocument",
@@ -236,8 +270,8 @@ class SPDX3JSONAdapter(FormatAdapter):
                 output_nodes.append(rel)
                 seen_ids.add(rel_id)
 
-        if "PackageVerificationCode" in self._primary_meta and packages:
-            pvc = copy.deepcopy(self._primary_meta["PackageVerificationCode"])
+        if "PackageVerificationCode" in primary_meta and packages:
+            pvc = copy.deepcopy(primary_meta["PackageVerificationCode"])
             output_nodes.append(pvc)
 
         return {"nodes": output_nodes}
