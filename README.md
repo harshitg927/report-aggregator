@@ -8,6 +8,7 @@ Merge N FOSSology-generated reports into one deduplicated report of the same for
 - **ID uniquification** — SPDX `SPDXRef-*` / CDX `bom-ref` / SPDX 3 IRI collision avoidance
 - **Per-field provenance** — sidecar JSON tracking which input contributed each value
 - **Conflict detection** — flags disagreements with first-writer resolution
+- **Edit layer** — persistent user corrections that survive merge re-runs (Phase 3)
 
 ## Supported Formats
 
@@ -149,6 +150,149 @@ Auto-detected format: cyclonedx
 Merged 2 reports → merged.json
 Provenance sidecar → merged.provenance.json
 ```
+
+## Edit Layer (Phase 3)
+
+The edit layer allows you to apply persistent corrections to merged reports that survive future re-merges. Edits are stored as [RFC-6902 JSON Patch](https://datatracker.ietf.org/doc/html/rfc6902) operations in the provenance sidecar.
+
+### Why use the edit layer?
+
+**Problem:** You merge two reports, manually fix an error in the output, then a new upload arrives. When you re-merge all three, your manual correction is lost.
+
+**Solution:** Apply corrections via the `edit` command. The edit is recorded in the provenance sidecar and automatically replayed on every re-merge.
+
+### Workflow example
+
+```bash
+# 1. Initial merge
+report-aggregator merge report-a.json report-b.json -o merged.json
+
+# 2. Discover an error in the merged output
+# Instead of manually editing merged.json, use the edit command:
+
+report-aggregator edit merged.json \
+  --patch '{"op": "replace", "path": "/metadata/component/copyright", "value": "Copyright 2024 Acme Corp"}' \
+  --who "maintainer@example.com" \
+  --reason "Fixed copyright year"
+
+# 3. New input arrives, re-merge all reports
+report-aggregator merge report-a.json report-b.json report-c.json -o merged.json
+
+# ✓ Your correction is automatically replayed!
+# The edit survives the re-merge because it's stored in merged.provenance.json
+```
+
+### Edit commands
+
+#### `edit` - Apply a correction
+
+```bash
+report-aggregator edit <merged-file> \
+  --patch '<json-patch-operation>' \
+  --who '<user-identifier>' \
+  --reason '<explanation>'
+```
+
+**RFC-6902 operations supported:**
+- `add` - Add a new field
+- `remove` - Delete a field
+- `replace` - Change a value
+- `move` - Move a value to a different path
+- `copy` - Copy a value to another path
+- `test` - Assert a value (for safety)
+
+**Examples:**
+
+```bash
+# Replace a copyright field
+report-aggregator edit merged.json \
+  --patch '{"op": "replace", "path": "/packages/0/PackageCopyrightText", "value": "© 2024"}' \
+  --who "alice@example.com"
+
+# Add a missing license
+report-aggregator edit merged.spdx \
+  --patch '{"op": "add", "path": "/packages/0/LicenseConcluded", "value": "MIT"}' \
+  --reason "Scanner missed obvious MIT license"
+
+# Remove an incorrect entry
+report-aggregator edit merged.json \
+  --patch '{"op": "remove", "path": "/components/5"}' \
+  --who "bob@example.com" \
+  --reason "Duplicate component"
+```
+
+#### `list-edits` - Show edit history
+
+```bash
+report-aggregator list-edits <merged-file>
+```
+
+Displays all edits with timestamps, users, operations, and reasons.
+
+**Example output:**
+```
+Edit History for merged.json (2 edits)
+
+1. [2026-06-17 10:30:00] alice@example.com
+   Operation: replace
+   Path: /packages/0/PackageCopyrightText
+   Reason: Fixed copyright year
+
+2. [2026-06-17 14:15:00] bob@example.com
+   Operation: remove
+   Path: /components/5
+   Reason: Duplicate component
+```
+
+#### `undo` - Remove an edit
+
+```bash
+# Undo last edit
+report-aggregator undo <merged-file>
+
+# Undo specific edit by index (1-based)
+report-aggregator undo <merged-file> --index 2
+```
+
+After undoing, re-run the original merge command to apply the change. The remaining edits will be replayed automatically.
+
+#### `replay` - Manually re-apply edits
+
+```bash
+report-aggregator replay <merged-file>
+```
+
+Useful if you manually edited the file and want to re-apply the recorded edits from the provenance sidecar.
+
+### How it works
+
+1. **Edits are stored** in the `.provenance.json` sidecar as RFC-6902 patches
+2. **Every merge checks** for an existing provenance file at the output path
+3. **Patches are replayed** automatically after merging but before rendering
+4. **Failed patches are skipped** with warnings (structure may have changed)
+5. **Edit history is preserved** across all re-merges
+
+### JSON Patch paths
+
+Paths use [JSON Pointer](https://datatracker.ietf.org/doc/html/rfc6901) notation (`/path/to/field`). To determine the correct path:
+
+1. Load the merged file to inspect its structure
+2. For CycloneDX: `/metadata/component/copyright`, `/components/0/licenses/0`
+3. For SPDX 2: `/packages/0/PackageName`, `/files/0/LicenseConcluded`
+4. For DEP5: `/stanzas/0/Copyright`
+5. For ReadMeOSS: `/sections/0/blocks/0/text`
+6. For SPDX 3: `/by_id/<spdx-id>/name`
+
+### Troubleshooting
+
+**"Patch path does not exist"**: The structure changed since the edit was created. Common when:
+- Files were removed from inputs
+- Re-ordering happened during merge
+- Edit path referenced a field that no longer exists
+
+**Solution:** View edit history with `list-edits`, identify the failing edit, `undo` it, inspect the new structure, and re-apply with the correct path.
+
+**Edit not taking effect**: Ensure you re-run the merge command after applying edits. Edits are stored in the provenance sidecar but only applied during merge.
 
 ## Testing
 

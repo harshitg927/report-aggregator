@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .patch import Patch
+
 
 @dataclass
 class InputInfo:
@@ -31,6 +33,16 @@ class ConflictEntry:
 
 
 @dataclass
+class EditEntry:
+    """User edit recorded in provenance sidecar."""
+
+    who: str  # user@example.com or username
+    when: str  # ISO 8601 timestamp
+    patch: Patch  # The RFC-6902 operation
+    reason: str = ""  # Optional: why the edit was made
+
+
+@dataclass
 class ProvenanceTracker:
     """Accumulates provenance information during a merge operation.
 
@@ -46,6 +58,7 @@ class ProvenanceTracker:
     inputs: list[InputInfo] = field(default_factory=list)
     field_provenance: dict[str, list[str]] = field(default_factory=dict)
     conflicts: list[ConflictEntry] = field(default_factory=list)
+    edits: list[EditEntry] = field(default_factory=list)  # Phase 3: edit history
 
     # -- Recording methods --
 
@@ -99,6 +112,32 @@ class ProvenanceTracker:
             )
         )
 
+    def add_edit(self, who: str, patch: Patch, reason: str = "") -> None:
+        """Add a user edit to the provenance history.
+
+        Args:
+            who: User identifier (email or username)
+            patch: The RFC-6902 patch operation
+            reason: Optional explanation for the edit
+        """
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.edits.append(
+            EditEntry(
+                who=who,
+                when=timestamp,
+                patch=patch,
+                reason=reason,
+            )
+        )
+
+    def get_edits(self) -> list[EditEntry]:
+        """Get all edits from the provenance history.
+
+        Returns:
+            List of edit entries
+        """
+        return self.edits
+
     # -- Serialization --
 
     def to_dict(self) -> dict[str, Any]:
@@ -125,6 +164,20 @@ class ProvenanceTracker:
                     "chosen": c.chosen,
                 }
                 for c in self.conflicts
+            ],
+            "edits": [
+                {
+                    "who": e.who,
+                    "when": e.when,
+                    "patch": {
+                        "op": e.patch.op,
+                        "path": e.patch.path,
+                        "value": e.patch.value,
+                        "from": e.patch.from_,
+                    },
+                    "reason": e.reason,
+                }
+                for e in self.edits
             ],
         }
 
@@ -166,5 +219,22 @@ class ProvenanceTracker:
                 values_by_source=c["values"],
                 resolution=c["resolution"],
                 chosen=c["chosen"],
+            )
+        # Deserialize edits
+        for e in data.get("edits", []):
+            patch_data = e["patch"]
+            patch = Patch(
+                op=patch_data["op"],
+                path=patch_data["path"],
+                value=patch_data.get("value"),
+                from_=patch_data.get("from", ""),
+            )
+            tracker.edits.append(
+                EditEntry(
+                    who=e["who"],
+                    when=e["when"],
+                    patch=patch,
+                    reason=e.get("reason", ""),
+                )
             )
         return tracker

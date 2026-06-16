@@ -7,10 +7,13 @@ Implements the format-agnostic merge loop from architecture §5:
   Step 4: Re-namespace local refs (graph formats only)
   Step 5: Record provenance
   Step 6: Assemble and render the output document
+  Step 7: Replay edits (Phase 3)
 """
 
 from __future__ import annotations
 
+import json
+import logging
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,7 +32,10 @@ from report_aggregator.engine.identity import (
     rewrite_refs_in_structure,
 )
 from report_aggregator.engine.mapping import MappingConfig
+from report_aggregator.engine.patch import PatchError, apply_patches
 from report_aggregator.engine.provenance import ProvenanceTracker
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -49,10 +55,32 @@ class MergeResult:
     provenance: ProvenanceTracker
 
 
+def load_provenance_if_exists(output_path: Path) -> ProvenanceTracker | None:
+    """Load existing provenance sidecar if it exists.
+
+    Args:
+        output_path: Path where the merged output will be written
+
+    Returns:
+        ProvenanceTracker if sidecar exists, None otherwise
+    """
+    sidecar_path = output_path.parent / f"{output_path.stem}.provenance.json"
+    if not sidecar_path.exists():
+        return None
+
+    try:
+        data = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        return ProvenanceTracker.from_dict(data)
+    except Exception as e:
+        logger.warning(f"Failed to load existing provenance from {sidecar_path}: {e}")
+        return None
+
+
 def merge_reports(
     adapter: FormatAdapter,
     inputs: list[InputFile],
     mapping: MappingConfig,
+    output_path: Path | None = None,
 ) -> MergeResult:
     """Run the full merge pipeline on N input reports.
 
@@ -60,13 +88,19 @@ def merge_reports(
         adapter: Format-specific adapter implementing FormatAdapter.
         inputs: List of input files to merge.
         mapping: Parsed mapping configuration for the format.
+        output_path: Optional output path to check for existing edits.
 
     Returns:
         MergeResult with rendered output bytes and provenance tracker.
     """
     provenance = ProvenanceTracker(format_name=mapping.format_name)
 
-    # -- Step 0: Load all inputs --
+    # -- Step 0a: Check for existing provenance with edits --
+    existing_provenance = None
+    if output_path:
+        existing_provenance = load_provenance_if_exists(output_path)
+
+    # -- Step 0b: Load all inputs --
     loaded_docs: list[tuple[InputFile, Any]] = []
     for inp in inputs:
         raw = inp.path.read_bytes()
@@ -190,6 +224,32 @@ def merge_reports(
         if isinstance(first_doc, dict) and "_primary_meta" in first_doc:
             metadata["primary_meta"] = first_doc["_primary_meta"]
     assembled_doc = adapter.assemble(merged_entries, metadata)
+
+    # -- Step 7: Replay edits from existing provenance (Phase 3) --
+    if existing_provenance and existing_provenance.edits:
+        logger.info(f"Replaying {len(existing_provenance.edits)} edit(s) from provenance")
+        failed_patches = []
+
+        for edit_entry in existing_provenance.edits:
+            try:
+                assembled_doc = apply_patches(assembled_doc, [edit_entry.patch])
+                logger.debug(f"Applied edit: {edit_entry.patch.op} {edit_entry.patch.path}")
+            except PatchError as e:
+                logger.warning(
+                    f"Skipping edit {edit_entry.patch.op} {edit_entry.patch.path}: {e}"
+                )
+                failed_patches.append((edit_entry, str(e)))
+
+        if failed_patches:
+            logger.warning(
+                f"⚠ {len(failed_patches)} edit(s) failed to apply (structure may have changed):"
+            )
+            for edit_entry, error in failed_patches:
+                logger.warning(f"  - {edit_entry.patch.path}: {error}")
+
+        # Preserve edit history in new provenance
+        provenance.edits = existing_provenance.edits
+
     output_bytes = adapter.render(assembled_doc)
 
     return MergeResult(output_bytes=output_bytes, provenance=provenance)
