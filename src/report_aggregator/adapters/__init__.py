@@ -18,6 +18,9 @@ def get_adapter_class(format_name: str):
     elif format_name == "spdx3json":
         from .spdx3json import SPDX3JSONAdapter
         return SPDX3JSONAdapter
+    elif format_name == "clixml":
+        from .clixml import CLIXMLAdapter
+        return CLIXMLAdapter
     else:
         raise ValueError(f"Unknown format: {format_name}")
 

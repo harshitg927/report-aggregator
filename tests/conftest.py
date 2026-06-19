@@ -49,3 +49,11 @@ def spdx3fckeditor_path(fixtures_dir: Path) -> Path:
 @pytest.fixture
 def spdx3zlib_path(fixtures_dir: Path) -> Path:
     return fixtures_dir / "SPDX3JSON_zlib132.zip.json"
+
+@pytest.fixture
+def clixmlfckeditor_path(fixtures_dir: Path) -> Path:
+    return fixtures_dir / "CLIXML_fckeditor-2.4.8.zip.xml"
+
+@pytest.fixture
+def clixmlzlib_path(fixtures_dir: Path) -> Path:
+    return fixtures_dir / "CLIXML_zlib132.zip.xml"

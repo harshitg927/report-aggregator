@@ -1,0 +1,43 @@
+[clixml]
+category = "stanza"  # No ref graph — skip Step 4 in engine
+
+# Identity rules
+component_identity = "componentSHA1"  # Lowercased
+license_identity = "md5(normalized_content)"
+copyright_identity = "md5(normalized_content)"
+obligation_identity = "md5(topic_plus_text_plus_sorted_licenses)"
+ecc_identity = "md5(normalized_content)"
+ipra_identity = "md5(normalized_content)"
+
+# Field merge policy
+union_fields = ["Files", "FileHash", "Acknowledgements", "Licenses"]
+conflict_fields = [
+    "ComponentName", 
+    "ComponentVersion", 
+    "Community",
+    "ComponentId",
+    "ReviewedBy",
+    "License/@type",
+    "GeneralAssessment",
+    "CriticalFilesFound",
+    "DependencyNotes"
+]
+
+# Text normalization
+normalize_cdata = true
+cdata_escape_sequences = ["]]&gt;"]
+na_as_empty = true  # Treat "NA" as empty string
+hash_prefixes = ["sha1:", "md5:", "sha256:"]  # Strip these from FileHash
+
+# Optional sections (may be absent in FOSSology output)
+optional_sections = [
+    "Copyright",
+    "ExportRestrictions", 
+    "Patents",
+    "Obligation",
+    "IrrelevantFiles",
+    "DoNotUseFiles"
+]
+
+# Header handling
+header_source = "primary"  # Use primary input's header

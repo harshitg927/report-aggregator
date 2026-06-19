@@ -29,6 +29,8 @@ def _sniff_format(path: Path) -> str | None:
         return "spdx3json"
     if name.startswith("CYCLONEDX_JSON_"):
         return "cyclonedx"
+    if name.startswith("CLIXML_"):
+        return "clixml"
 
     try:
         head = path.read_bytes()[:4096].decode("utf-8", errors="replace")
@@ -47,6 +49,10 @@ def _sniff_format(path: Path) -> str | None:
             return "spdx3json"
         if '"bomFormat"' in head or '"specVersion"' in head:
             return "cyclonedx"
+    
+    if suffix == ".xml":
+        if "<ComponentLicenseInformation" in head:
+            return "clixml"
 
     if suffix == ".txt":
         return None
@@ -117,6 +123,13 @@ def _register_adapters() -> None:
     except ImportError:
         pass
 
+    try:
+        from report_aggregator.adapters.clixml import CLIXMLAdapter
+
+        _ADAPTER_REGISTRY["clixml"] = CLIXMLAdapter
+    except ImportError:
+        pass
+
 
 def main(argv: list[str] | None = None) -> int:
     """Main CLI entry point."""
@@ -146,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     merge_parser.add_argument(
         "--format",
-        choices=["cyclonedx", "spdx2tv", "dep5", "readmeoss", "spdx3json"],
+        choices=["cyclonedx", "spdx2tv", "dep5", "readmeoss", "spdx3json", "clixml"],
         default=None,
         help="Report format (auto-detected from extension if omitted)",
     )
