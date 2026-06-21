@@ -8,10 +8,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, Response
 from pydantic import BaseModel
 
 from report_aggregator.api import fieldtree, storage
+from report_aggregator.api.diffpatch import build_patches
 from report_aggregator.api.storage import AggregateMeta, InputMeta
 from report_aggregator.engine.mapping import MappingError, load_mapping
 from report_aggregator.engine.merge import InputFile, merge_reports
@@ -234,6 +235,46 @@ def get_input_raw(aggregate_id: str, idx: int):
     return PlainTextResponse(path.read_bytes().decode("utf-8", errors="replace"))
 
 
+_MEDIA_TYPES = {
+    "cyclonedx": "application/json",
+    "spdx3json": "application/json",
+    "clixml": "application/xml",
+    "spdx2tv": "text/plain",
+    "dep5": "text/plain",
+    "readmeoss": "text/plain",
+}
+
+
+@router.get("/reports/{aggregate_id}/download")
+def download_merged(aggregate_id: str):
+    """Download the merged report as a file attachment."""
+    meta = _require_meta(aggregate_id)
+    data = storage.merged_path(aggregate_id, meta).read_bytes()
+    media = _MEDIA_TYPES.get(meta.format, "application/octet-stream")
+    return Response(
+        content=data,
+        media_type=media,
+        headers={
+            "Content-Disposition": f'attachment; filename="{meta.output_filename}"'
+        },
+    )
+
+
+@router.get("/reports/{aggregate_id}/provenance/download")
+def download_provenance(aggregate_id: str):
+    """Download the provenance sidecar as a JSON file attachment."""
+    meta = _require_meta(aggregate_id)
+    path = storage.sidecar_path(aggregate_id, meta)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Provenance sidecar not found")
+    name = f"{Path(meta.output_filename).stem}.provenance.json"
+    return Response(
+        content=path.read_bytes(),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
+    )
+
+
 @router.get("/reports/{aggregate_id}/conflicts")
 def get_conflicts(aggregate_id: str):
     meta = _require_meta(aggregate_id)
@@ -298,6 +339,52 @@ def apply_edit(aggregate_id: str, body: EditRequest):
     provenance.write_sidecar(merged_file)
 
     return {"ok": True, **_summary(meta)}
+
+
+class DocumentRequest(BaseModel):
+    content: str
+    who: str = "user"
+    reason: str = "Edited via interactive editor"
+
+
+@router.put("/reports/{aggregate_id}/document")
+def replace_document(aggregate_id: str, body: DocumentRequest):
+    """Replace the whole merged document from the interactive editor.
+
+    The edited text is validated by the format adapter, diffed against the
+    current document, and the difference is recorded as RFC-6902 patches in the
+    edit layer so the change stays transparent and replays on re-merge.
+    """
+    meta = _require_meta(aggregate_id)
+
+    mapping = load_mapping(meta.format)
+    registry = get_adapter_registry()
+    if meta.format not in registry:
+        raise HTTPException(status_code=400, detail=f"Adapter for '{meta.format}' not available")
+    adapter = registry[meta.format](mapping)
+
+    merged_file = storage.merged_path(aggregate_id, meta)
+    old_doc = adapter.load(merged_file.read_bytes())
+
+    # Validate the edited content by parsing it with the adapter.
+    try:
+        new_doc = adapter.load(body.content.encode("utf-8"))
+    except Exception as exc:  # noqa: BLE001 - surface parse/validation errors
+        raise HTTPException(status_code=422, detail=f"Invalid document: {exc}")
+
+    patches = build_patches(old_doc, new_doc)
+
+    # Record each patch in the edit layer, then persist the user's exact text.
+    sidecar = storage.sidecar_path(aggregate_id, meta)
+    prov_data = json.loads(sidecar.read_text(encoding="utf-8"))
+    provenance = ProvenanceTracker.from_dict(prov_data)
+    for patch in patches:
+        provenance.add_edit(who=body.who, patch=patch, reason=body.reason)
+
+    merged_file.write_bytes(body.content.encode("utf-8"))
+    provenance.write_sidecar(merged_file)
+
+    return {"ok": True, "changes": len(patches), **_summary(meta)}
 
 
 @router.delete("/reports/{aggregate_id}/edits/{index}")

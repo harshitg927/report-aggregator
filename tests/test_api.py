@@ -160,3 +160,56 @@ def test_invalid_patch_path(client):
         json={"op": "replace", "path": "/does/not/exist", "value": "x"},
     )
     assert resp.status_code == 422
+
+
+def test_download_merged_and_provenance(client):
+    agg_id = _merge_cdx(client)
+
+    dl = client.get(f"/api/reports/{agg_id}/download")
+    assert dl.status_code == 200
+    assert dl.headers["content-type"].startswith("application/json")
+    assert "attachment" in dl.headers["content-disposition"]
+    assert '"bomFormat"' in dl.text
+
+    prov = client.get(f"/api/reports/{agg_id}/provenance/download")
+    assert prov.status_code == 200
+    assert "attachment" in prov.headers["content-disposition"]
+    assert "aggregate_id" in prov.text
+
+
+def test_document_editor_save_records_patches(client):
+    agg_id = _merge_cdx(client)
+    raw = client.get(f"/api/reports/{agg_id}/raw").text
+    import json as _json
+
+    doc = _json.loads(raw)
+    # Edit a real field in the merged document.
+    doc["components"][0]["name"] = "EDITED-VIA-EDITOR"
+    new_content = _json.dumps(doc, indent=4)
+
+    resp = client.put(
+        f"/api/reports/{agg_id}/document",
+        json={"content": new_content, "who": "editor@test", "reason": "bulk edit"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["changes"] >= 1
+
+    # The change is recorded in the edit history.
+    edits = client.get(f"/api/reports/{agg_id}/edits").json()["edits"]
+    assert len(edits) >= 1
+    assert any(e["who"] == "editor@test" for e in edits)
+
+    # The field tree reflects the new value.
+    tree = client.get(f"/api/reports/{agg_id}/fields").json()
+    node = next(n for n in tree["nodes"] if n["path"] == "/components/0/name")
+    assert node["value"] == "EDITED-VIA-EDITOR"
+
+
+def test_document_editor_rejects_invalid_content(client):
+    agg_id = _merge_cdx(client)
+    resp = client.put(
+        f"/api/reports/{agg_id}/document",
+        json={"content": "{ not valid json", "who": "x"},
+    )
+    assert resp.status_code == 422
