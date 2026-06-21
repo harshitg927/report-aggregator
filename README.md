@@ -318,6 +318,40 @@ Paths use [JSON Pointer](https://datatracker.ietf.org/doc/html/rfc6901) notation
 
 **Edit not taking effect**: Ensure you re-run the merge command after applying edits. Edits are stored in the provenance sidecar but only applied during merge.
 
+## HTTP API (for the web UI)
+
+An optional FastAPI service exposes the merge/edit engine over HTTP for the
+[`report-aggregator-ui`](../report-aggregator-ui) front-end. It reuses the
+engine in-process (no CLI shell-out).
+
+Install the API extra and run the service:
+
+```bash
+pip install -e ".[api]"
+python -m report_aggregator.api          # http://127.0.0.1:8000
+```
+
+Key endpoints (all under `/api`):
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | Liveness probe |
+| POST | `/merge` | Multipart upload of input files (+ optional `format`); returns an `aggregate_id` |
+| GET | `/reports` | List aggregates |
+| GET | `/reports/{id}` | Aggregate summary + counts |
+| GET | `/reports/{id}/fields` | Flattened field tree with provenance + conflicts |
+| GET | `/reports/{id}/raw` | Merged report text |
+| GET | `/reports/{id}/inputs/{idx}/raw` | A single input's text |
+| GET | `/reports/{id}/conflicts` | Detected conflicts |
+| GET/POST | `/reports/{id}/edits` | List or apply RFC-6902 edits |
+| DELETE | `/reports/{id}/edits/{index}` | Undo an edit (re-merge + replay) |
+
+Workspaces are stored under `REPORT_AGGREGATOR_WORKSPACE` (default
+`./.api_workspaces`).
+
+> **Security:** the service has no authentication and permissive CORS for
+> `localhost:3000`. It is intended for local development only.
+
 ## Testing
 
 ```bash
