@@ -92,7 +92,13 @@ def compute_checksum_identity(
     if fallback_algs is None:
         fallback_algs = ["MD5", "SHA-256"]
 
-    alg_map = {h["alg"]: h["content"] for h in hashes}
+    # Skip malformed entries (missing 'alg' or 'content') instead of raising a
+    # bare KeyError — a clear ValueError is raised below if nothing usable found.
+    alg_map = {
+        h["alg"]: h["content"]
+        for h in hashes
+        if isinstance(h, dict) and "alg" in h and "content" in h
+    }
 
     for alg in [preferred_alg] + fallback_algs:
         if alg in alg_map:
@@ -138,7 +144,11 @@ def compute_spdx3_checksum_identity(
     if fallback_algs is None:
         fallback_algs = ["md5", "sha256"]
 
-    alg_map = {h["algorithm"].lower(): h["hashValue"] for h in verified_using}
+    alg_map = {
+        h["algorithm"].lower(): h["hashValue"]
+        for h in verified_using
+        if isinstance(h, dict) and "algorithm" in h and "hashValue" in h
+    }
 
     for alg in [preferred_alg.lower()] + [a.lower() for a in fallback_algs]:
         if alg in alg_map:

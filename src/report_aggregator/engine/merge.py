@@ -28,8 +28,6 @@ from report_aggregator.engine.conflict import (
 )
 from report_aggregator.engine.identity import (
     make_namespaced_ref,
-    rewrite_embedded_refs,
-    rewrite_refs_in_structure,
 )
 from report_aggregator.engine.mapping import MappingConfig
 from report_aggregator.engine.patch import PatchError, apply_patches
@@ -112,6 +110,28 @@ def merge_reports(
             input_index=inp.input_index,
         )
 
+    # -- Step 0c: Per-input local-ref namespacing (graph formats only) --
+    # Each input independently uses SPDXRef-upload<id> / bom-ref / IRI values
+    # that COLLIDE across documents produced by different FOSSology instances.
+    # Namespace every input's local refs with its own input-index prefix BEFORE
+    # grouping, so two *distinct* entries that merely share an ID across inputs
+    # stay distinct (and don't overwrite each other in a shared remap table).
+    #
+    # This is routed through the adapter's own rewrite_refs() so that
+    # format-specific cross-references are rewired correctly in the same pass:
+    #   - SPDX 2 `relationships` + license expressions
+    #   - SPDX 3 satellite nodes (Annotation/Relationship subjects)
+    #   - CDX bom-ref values
+    # Identity (Step 1) is checksum/text based and is unaffected by this.
+    if mapping.category == "graph" and mapping.local_ref_field:
+        for inp, doc in loaded_docs:
+            remap = {
+                ref: make_namespaced_ref(ref, inp.input_index)
+                for ref in adapter.local_refs(doc)
+            }
+            if remap:
+                adapter.rewrite_refs(doc, remap)
+
     # -- Step 1: Collect entries from all inputs --
     source_order = {inp.source_id: inp.input_index for inp in inputs}
     all_entries: list[Entry] = []
@@ -134,15 +154,21 @@ def merge_reports(
             f"All inputs appear empty or contain no recognizable entries."
         )
 
-    # -- Step 2: Group by identity --
-    buckets: dict[str, list[Entry]] = defaultdict(list)
+    # -- Step 2: Group by (kind, identity) --
+    # Keyed by kind as well as identity so a package and a file that happen to
+    # share a checksum (or a license block whose md5 collides with a hash) are
+    # never merged into a single entry.
+    buckets: dict[tuple[EntryKind, str], list[Entry]] = defaultdict(list)
     for entry in all_entries:
-        buckets[entry.identity_key].append(entry)
+        buckets[(entry.kind, entry.identity_key)].append(entry)
 
     # -- Step 3: Merge each bucket --
     merged_entries: list[Entry] = []
-    license_alias_map: dict[str, str] = {}
-    for identity_key, bucket in buckets.items():
+    # Maps the local-ref ID of every deduped-away entry → the surviving
+    # entry's ID, so dangling cross-references (relationships, license
+    # expressions, satellites) can be redirected to the survivor in Step 4.
+    dedup_alias_map: dict[str, str] = {}
+    for (_kind, identity_key), bucket in buckets.items():
         if len(bucket) == 1:
             # Unique entry — pass through
             entry = bucket[0]
@@ -166,7 +192,16 @@ def merge_reports(
                     for entry in sorted_bucket:
                         loser_id = _license_id(entry)
                         if loser_id and loser_id != winner_id:
-                            license_alias_map[loser_id] = winner_id
+                            dedup_alias_map[loser_id] = winner_id
+            elif mapping.local_ref_field and isinstance(merged.data, dict):
+                winner_id = merged.data.get(mapping.local_ref_field)
+                if winner_id:
+                    for entry in sorted_bucket:
+                        if not isinstance(entry.data, dict):
+                            continue
+                        loser_id = entry.data.get(mapping.local_ref_field)
+                        if loser_id and loser_id != winner_id:
+                            dedup_alias_map[loser_id] = winner_id
 
     # -- Step 3.5: Optional adapter-specific conflict detection (e.g. DEP5 glob overlap) --
     if hasattr(adapter, "detect_conflicts"):
@@ -178,35 +213,10 @@ def merge_reports(
                 chosen=conflict.chosen,
             )
 
-    # -- Step 4: Re-namespace local refs (graph formats only) --
-    if mapping.category == "graph" and mapping.local_ref_field:
-        # Redirect deduped-away license IDs to the surviving entry before namespacing
-        if license_alias_map:
-            for entry in merged_entries:
-                if isinstance(entry.data, dict):
-                    _rewrite_entry_refs(
-                        entry.data, mapping.local_ref_field, license_alias_map
-                    )
-
-        remap: dict[str, str] = {}
-        for inp, doc in loaded_docs:
-            refs = adapter.local_refs(doc)
-            for ref in refs:
-                new_ref = make_namespaced_ref(ref, inp.input_index)
-                remap[ref] = new_ref
-
-        # Rewrite refs in merged entries — both the top-level ref field
-        # and any embedded references (e.g. LicenseRef-* in LicenseConcluded).
-        # We do NOT call adapter.rewrite_refs(doc, remap) on loaded_docs because
-        # some adapters yield entries that share dict references with the doc,
-        # which would cause double-prefixing.
-        for entry in merged_entries:
-            if isinstance(entry.data, dict):
-                _rewrite_entry_refs(entry.data, mapping.local_ref_field, remap)
-                if "_satellites" in entry.data:
-                    entry.data["_satellites"] = rewrite_refs_in_structure(
-                        entry.data["_satellites"], remap
-                    )
+    # -- Step 4: Re-namespacing of local refs already happened per-input in
+    # Step 0c. The only remaining ref work is redirecting references that
+    # pointed at deduped-away entries to their survivor — done in Step 6
+    # (after assemble) via the adapter's rewrite_refs().
 
     # -- Step 5: Provenance already recorded in Step 3 --
 
@@ -224,6 +234,12 @@ def merge_reports(
         if isinstance(first_doc, dict) and "_primary_meta" in first_doc:
             metadata["primary_meta"] = first_doc["_primary_meta"]
     assembled_doc = adapter.assemble(merged_entries, metadata)
+
+    # Redirect any references that pointed at deduped-away entries to the
+    # surviving entry. Routed through the adapter so SPDX relationships,
+    # license expressions and SPDX 3 satellites are all rewired consistently.
+    if mapping.category == "graph" and dedup_alias_map:
+        adapter.rewrite_refs(assembled_doc, dedup_alias_map)
 
     # -- Step 7: Replay edits from existing provenance (Phase 3) --
     if existing_provenance and existing_provenance.edits:
@@ -359,85 +375,5 @@ def _apply_last_writer_license_name(merged: Entry, bucket: list[Entry]) -> None:
         if isinstance(val, str) and val:
             merged.data[key] = val
             return
-
-
-def _is_embeddable_ref(ref: str) -> bool:
-    """Return True if this ref could appear embedded inside other strings.
-
-    Only SPDX-style refs (SPDXRef-*, LicenseRef-*) can appear inside
-    license expressions and other string fields. CDX bom-refs are simple
-    integers/short tokens and should NOT be treated as embeddable.
-    """
-    return ref.startswith("SPDXRef-") or ref.startswith("LicenseRef-")
-
-
-# Fields in graph documents that hold exact IRI references (SPDX 3 JSON).
-_IRI_REF_FIELDS = frozenset({
-    "subject", "from", "to", "creationInfo", "element",
-    "createdBy", "createdUsing",
-})
-
-
-def _rewrite_iri_value(value: str, remap: dict[str, str]) -> str:
-    """Rewrite an IRI reference, including fragment-only matches."""
-    if value in remap:
-        return remap[value]
-    if "#" in value:
-        base, fragment = value.rsplit("#", 1)
-        if fragment in remap:
-            target = remap[fragment]
-            return target if target.startswith(("http", "urn:")) else f"{base}#{target}"
-        prefixed = f"{base}#{fragment}"
-        if prefixed in remap:
-            return remap[prefixed]
-    return value
-
-
-def _rewrite_entry_refs(
-    data: dict[str, Any],
-    local_ref_field: str,
-    remap: dict[str, str],
-) -> None:
-    """Rewrite all refs in an entry's data dict using the remap table.
-
-    Handles:
-    - The top-level ref field (e.g. ``bom-ref``, ``SPDXID``, ``spdxId``) — exact match
-    - Common IRI reference fields (``subject``, ``from``, ``to``, etc.)
-    - Embedded refs in string values (e.g. ``LicenseRef-*`` in license expressions)
-    - Refs inside lists of strings (e.g. ``LicenseInfoInFile``)
-
-    Only refs that look like SPDX identifiers are replaced inside arbitrary strings;
-    short CDX bom-refs (e.g. ``"2"``) are only replaced as exact matches on
-    the local_ref_field to avoid corrupting filenames and other data.
-    """
-    embeddable_remap = {k: v for k, v in remap.items() if _is_embeddable_ref(k)}
-
-    for key, value in list(data.items()):
-        if key.startswith("_"):
-            continue
-        if key == local_ref_field and isinstance(value, str):
-            data[key] = _rewrite_iri_value(value, remap)
-        elif key in _IRI_REF_FIELDS:
-            if isinstance(value, str):
-                data[key] = _rewrite_iri_value(value, remap)
-            elif isinstance(value, list):
-                data[key] = [
-                    _rewrite_iri_value(item, remap) if isinstance(item, str) else item
-                    for item in value
-                ]
-        elif isinstance(value, str):
-            data[key] = _rewrite_string_refs(value, embeddable_remap)
-        elif isinstance(value, list):
-            data[key] = [
-                _rewrite_string_refs(item, embeddable_remap)
-                if isinstance(item, str)
-                else item
-                for item in value
-            ]
-
-
-def _rewrite_string_refs(text: str, remap: dict[str, str]) -> str:
-    """Replace any known SPDX-style refs inside a string value."""
-    return rewrite_embedded_refs(text, remap)
 
 

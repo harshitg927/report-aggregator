@@ -23,7 +23,7 @@ class CLIXMLAdapter:
 
     def __init__(self, mapping: dict[str, Any]):
         self.mapping = mapping
-        self._identity_cache: dict[int, str] = {}
+        self._identity_cache: dict[str, str] = {}
         self._cdata_escape_re = re.compile(r']]>')
         self._parent_map: dict[int, str] = {}  # Maps element id() to parent component ID
 
@@ -234,17 +234,22 @@ class CLIXMLAdapter:
         return hashlib.md5(combined.encode('utf-8')).hexdigest()
 
     def _text_identity(self, text: str) -> str:
-        """md5(normalized text) with caching."""
-        # Check cache
-        text_id = id(text)
-        if text_id in self._identity_cache:
-            return self._identity_cache[text_id]
-        
+        """md5(normalized text) with caching.
+
+        Cache is keyed by the text *value* (not ``id(text)``): CPython reuses
+        object ids after garbage collection, so a transient string returned by
+        ElementTree's ``findtext`` could collide with a previously cached id and
+        return the wrong hash. Keying on the value is correct and still avoids
+        re-normalizing identical blocks.
+        """
+        cached = self._identity_cache.get(text)
+        if cached is not None:
+            return cached
+
         normalized = self._normalize_cdata(text)
         hash_val = hashlib.md5(normalized.encode('utf-8')).hexdigest()
-        
-        # Cache result
-        self._identity_cache[text_id] = hash_val
+
+        self._identity_cache[text] = hash_val
         return hash_val
 
     def _normalize_cdata(self, text: str) -> str:

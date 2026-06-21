@@ -87,22 +87,7 @@ class SPDX3JSONAdapter(FormatAdapter):
             )
 
         # Pre-index satellites by subject for O(1) lookup instead of O(N)
-        satellites_by_subject: dict[str, list[dict]] = {}
-        for node in nodes:
-            node_type = node.get("type", "")
-            if node_type in _META_NODE_TYPES or node_type in _ENTRY_NODE_TYPES:
-                continue
-            
-            # Index by subject field
-            subject = node.get("subject")
-            if subject:
-                satellites_by_subject.setdefault(subject, []).append(node)
-            
-            # Also index by ID prefix for fragment-based satellites
-            node_id = node.get("spdxId") or node.get("@id", "")
-            if "#" in node_id:
-                prefix = node_id.rsplit("#", 1)[0]
-                satellites_by_subject.setdefault(prefix + "#", []).append(node)
+        satellites_by_subject = self._build_satellite_index(nodes)
 
         return {
             "nodes": nodes,
@@ -110,6 +95,27 @@ class SPDX3JSONAdapter(FormatAdapter):
             "satellites_by_subject": satellites_by_subject,
             "_primary_meta": primary_meta,
         }
+
+    @staticmethod
+    def _build_satellite_index(nodes: list[dict]) -> dict[str, list[dict]]:
+        """Index non-entry/non-meta nodes by their subject ID for O(1) lookup."""
+        satellites_by_subject: dict[str, list[dict]] = {}
+        for node in nodes:
+            node_type = node.get("type", "")
+            if node_type in _META_NODE_TYPES or node_type in _ENTRY_NODE_TYPES:
+                continue
+
+            # Index by subject field
+            subject = node.get("subject")
+            if subject:
+                satellites_by_subject.setdefault(subject, []).append(node)
+
+            # Also index by ID prefix for fragment-based satellites
+            node_id = node.get("spdxId") or node.get("@id", "")
+            if "#" in node_id:
+                prefix = node_id.rsplit("#", 1)[0]
+                satellites_by_subject.setdefault(prefix + "#", []).append(node)
+        return satellites_by_subject
 
     def _collect_satellites(self, doc: dict[str, Any], subject_id: str) -> list[dict[str, Any]]:
         """Collect satellite nodes for a given subject ID.
@@ -180,6 +186,11 @@ class SPDX3JSONAdapter(FormatAdapter):
             (remap.get(k, k)): rewrite_refs_in_structure(v, remap)
             for k, v in doc.get("by_id", {}).items()
         }
+        # rewrite_refs_in_structure builds *new* node dicts, so any pre-built
+        # satellite index now points at stale dicts — rebuild it from the
+        # rewritten nodes so entries() attaches correctly-namespaced satellites.
+        if "satellites_by_subject" in doc:
+            doc["satellites_by_subject"] = self._build_satellite_index(doc["nodes"])
 
     def assemble(self, entries: list[Entry], metadata: dict[str, Any]) -> dict[str, Any]:
         output_nodes: list[dict[str, Any]] = []
