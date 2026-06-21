@@ -341,9 +341,12 @@ Key endpoints (all under `/api`):
 | GET | `/reports/{id}` | Aggregate summary + counts |
 | GET | `/reports/{id}/fields` | Flattened field tree with provenance + conflicts |
 | GET | `/reports/{id}/raw` | Merged report text |
+| GET | `/reports/{id}/download` | Download merged report as a file |
+| GET | `/reports/{id}/provenance/download` | Download the provenance sidecar |
 | GET | `/reports/{id}/inputs/{idx}/raw` | A single input's text |
 | GET | `/reports/{id}/conflicts` | Detected conflicts |
 | GET/POST | `/reports/{id}/edits` | List or apply RFC-6902 edits |
+| PUT | `/reports/{id}/document` | Replace the whole document (editor); diffed into recorded patches |
 | DELETE | `/reports/{id}/edits/{index}` | Undo an edit (re-merge + replay) |
 
 Workspaces are stored under `REPORT_AGGREGATOR_WORKSPACE` (default
