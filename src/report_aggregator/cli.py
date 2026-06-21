@@ -7,128 +7,25 @@ import sys
 from pathlib import Path
 
 from report_aggregator.engine.mapping import MappingError, load_mapping
+from report_aggregator.formats import (
+    detect_format as _shared_detect_format,
+    get_adapter_registry,
+    sniff_format as _sniff_format,
+)
 
 
-# Format auto-detection by file extension (non-ambiguous types)
-_EXT_FORMAT_MAP = {
-    ".spdx": "spdx2tv",
-}
-
-# Adapter registry — populated as adapters are implemented
+# Adapter registry — populated by _register_adapters() from the shared helper.
 _ADAPTER_REGISTRY: dict[str, type] = {}
-
-
-def _sniff_format(path: Path) -> str | None:
-    """Detect format from filename pattern or file content."""
-    name = path.name
-    if name.startswith("DEP5_"):
-        return "dep5"
-    if name.startswith("ReadMe_OSS_"):
-        return "readmeoss"
-    if name.startswith("SPDX3JSON_"):
-        return "spdx3json"
-    if name.startswith("CYCLONEDX_JSON_"):
-        return "cyclonedx"
-    if name.startswith("CLIXML_"):
-        return "clixml"
-
-    try:
-        head = path.read_bytes()[:4096].decode("utf-8", errors="replace")
-    except OSError:
-        return _EXT_FORMAT_MAP.get(path.suffix.lower())
-
-    if head.startswith("Format: https://www.debian.org/doc/packaging-manuals/copyright-format/"):
-        return "dep5"
-    if head.lstrip().startswith("=" * 20):
-        return "readmeoss"
-
-    suffix = path.suffix.lower()
-    if suffix == ".json":
-        stripped = head.lstrip()
-        if stripped.startswith("["):
-            return "spdx3json"
-        if '"bomFormat"' in head or '"specVersion"' in head:
-            return "cyclonedx"
-    
-    if suffix == ".xml":
-        if "<ComponentLicenseInformation" in head:
-            return "clixml"
-
-    if suffix == ".txt":
-        return None
-
-    return _EXT_FORMAT_MAP.get(suffix)
 
 
 def _detect_format(paths: list[Path]) -> str | None:
     """Attempt to detect the report format from filenames and content."""
-    formats: list[str | None] = []
-    for p in paths:
-        fmt = _sniff_format(p)
-        formats.append(fmt)
-
-    # Check if any format is None
-    if None in formats:
-        return None
-
-    # Check if all formats are the same
-    unique_formats = set(formats)
-    if len(unique_formats) == 1:
-        return formats[0]
-    
-    # Format mismatch detected
-    print(
-        "Error: Input format mismatch detected:",
-        file=sys.stderr
-    )
-    for p, fmt in zip(paths, formats):
-        print(f"  {p}: {fmt}", file=sys.stderr)
-    return None
+    return _shared_detect_format(paths, stream=sys.stderr)
 
 
 def _register_adapters() -> None:
     """Lazily register available adapters."""
-    try:
-        from report_aggregator.adapters.cyclonedx import CycloneDXAdapter
-
-        _ADAPTER_REGISTRY["cyclonedx"] = CycloneDXAdapter
-    except ImportError:
-        pass
-
-    try:
-        from report_aggregator.adapters.spdx2tv import SPDX2TVAdapter
-
-        _ADAPTER_REGISTRY["spdx2tv"] = SPDX2TVAdapter
-    except ImportError:
-        pass
-
-    try:
-        from report_aggregator.adapters.dep5 import DEP5Adapter
-
-        _ADAPTER_REGISTRY["dep5"] = DEP5Adapter
-    except ImportError:
-        pass
-
-    try:
-        from report_aggregator.adapters.readmeoss import ReadMeOSSAdapter
-
-        _ADAPTER_REGISTRY["readmeoss"] = ReadMeOSSAdapter
-    except ImportError:
-        pass
-
-    try:
-        from report_aggregator.adapters.spdx3json import SPDX3JSONAdapter
-
-        _ADAPTER_REGISTRY["spdx3json"] = SPDX3JSONAdapter
-    except ImportError:
-        pass
-
-    try:
-        from report_aggregator.adapters.clixml import CLIXMLAdapter
-
-        _ADAPTER_REGISTRY["clixml"] = CLIXMLAdapter
-    except ImportError:
-        pass
+    _ADAPTER_REGISTRY.update(get_adapter_registry())
 
 
 def main(argv: list[str] | None = None) -> int:

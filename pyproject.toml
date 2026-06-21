@@ -20,11 +20,18 @@ classifiers = [
 
 [project.scripts]
 report-aggregator = "report_aggregator.cli:main"
+report-aggregator-api = "report_aggregator.api.__main__:main"
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7",
     "ruff",
+    "httpx",
+]
+api = [
+    "fastapi",
+    "uvicorn[standard]",
+    "python-multipart",
 ]
 
 [tool.hatch.build.targets.wheel]

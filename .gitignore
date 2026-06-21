@@ -38,3 +38,6 @@ tests/fixtures/
 *.provenance.json
 merged.json
 merged.spdx
+
+# API workspace storage
+.api_workspaces/
