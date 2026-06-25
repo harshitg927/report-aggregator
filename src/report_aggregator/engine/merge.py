@@ -30,7 +30,7 @@ from report_aggregator.engine.identity import (
     make_namespaced_ref,
 )
 from report_aggregator.engine.mapping import MappingConfig
-from report_aggregator.engine.patch import PatchError, apply_patches
+from report_aggregator.engine.patch import PatchError, apply_document_patch
 from report_aggregator.engine.provenance import ProvenanceTracker
 
 logger = logging.getLogger(__name__)
@@ -248,7 +248,9 @@ def merge_reports(
 
         for edit_entry in existing_provenance.edits:
             try:
-                assembled_doc = apply_patches(assembled_doc, [edit_entry.patch])
+                assembled_doc = apply_document_patch(
+                    assembled_doc, edit_entry.patch, adapter.load
+                )
                 logger.debug(f"Applied edit: {edit_entry.patch.op} {edit_entry.patch.path}")
             except PatchError as e:
                 logger.warning(

@@ -8,6 +8,7 @@ transparent and replays on re-merge — exactly like an inline edit.
 from __future__ import annotations
 
 import copy
+import json
 from typing import Any
 
 from report_aggregator.engine.patch import Patch, apply_patches
@@ -69,19 +70,57 @@ def diff_to_patches(old: Any, new: Any, path: str = "") -> list[Patch]:
     return []
 
 
-def build_patches(old: Any, new: Any) -> list[Patch]:
+def _patch_json_serializable(patch: Patch) -> bool:
+    """Return True if patch fields can be stored in provenance JSON."""
+    try:
+        json.dumps(
+            {
+                "op": patch.op,
+                "path": patch.path,
+                "value": patch.value,
+                "from": patch.from_,
+            }
+        )
+        return True
+    except TypeError:
+        return False
+
+
+def _patches_json_serializable(patches: list[Patch]) -> bool:
+    return all(_patch_json_serializable(p) for p in patches)
+
+
+def _content_replace_patch(raw_new: str) -> list[Patch]:
+    """Record a full-document replacement as raw text (JSON-serializable)."""
+    return [Patch(op="replace", path="/", value=raw_new)]
+
+
+def build_patches(old: Any, new: Any, raw_new: str | None = None) -> list[Patch]:
     """Diff old->new and verify the patches reproduce ``new``.
 
     Falls back to a single root replace if the granular diff does not
     reconstruct ``new`` exactly (guarantees the recorded edit is consistent).
+
+    When ``raw_new`` is provided and native structures are not JSON-serializable
+    (e.g. CLIXML ``Element`` trees), the fallback stores the edited text so the
+    provenance sidecar can be written and edits replay on re-merge.
     """
     patches = diff_to_patches(old, new)
     if not patches:
         return []
+
+    if not _patches_json_serializable(patches):
+        if raw_new is not None:
+            return _content_replace_patch(raw_new)
+        patches = [Patch(op="replace", path="/", value=copy.deepcopy(new))]
+
     try:
         check = apply_patches(copy.deepcopy(old), copy.deepcopy(patches))
         if check == new:
             return patches
     except Exception:
         pass
+
+    if raw_new is not None:
+        return _content_replace_patch(raw_new)
     return [Patch(op="replace", path="/", value=copy.deepcopy(new))]

@@ -342,3 +342,36 @@ def apply_patches(doc: Any, patches: list[Patch]) -> Any:
     for patch in patches:
         doc = apply_patch(doc, patch)
     return doc
+
+
+def apply_document_patch(
+    doc: Any,
+    patch: Patch,
+    load_from_bytes: Any | None = None,
+) -> Any:
+    """Apply a provenance edit patch, including full-document text replacements.
+
+    Document-editor saves for formats with non-JSON-native structures (CLIXML)
+    record ``replace`` at ``/`` with the raw edited file text. When
+    ``load_from_bytes`` is provided (typically ``adapter.load``), that path
+    re-parses the text instead of assigning a string to the native document.
+    """
+    if (
+        load_from_bytes is not None
+        and patch.op == "replace"
+        and patch.path == "/"
+        and isinstance(patch.value, str)
+    ):
+        return load_from_bytes(patch.value.encode("utf-8"))
+    return apply_patch(doc, patch)
+
+
+def apply_document_patches(
+    doc: Any,
+    patches: list[Patch],
+    load_from_bytes: Any | None = None,
+) -> Any:
+    """Apply provenance edits sequentially, with document-text replacement support."""
+    for patch in patches:
+        doc = apply_document_patch(doc, patch, load_from_bytes)
+    return doc
