@@ -26,14 +26,33 @@ FORMAT_EXTENSION = {
     "clixml": ".xml",
 }
 
+DEFAULT_WORKSPACE_DIRNAME = ".api_workspaces"
+
+
+def _project_root() -> Path:
+    """Return the report-aggregator repository root (directory with pyproject.toml)."""
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / "pyproject.toml").is_file():
+            return parent
+    # Fallback: src/report_aggregator/api/storage.py → repo root
+    return here.parents[3]
+
 
 def workspace_root() -> Path:
-    """Return the root directory holding all aggregate workspaces."""
+    """Return the root directory holding all aggregate workspaces.
+
+    Defaults to ``<report-aggregator>/.api_workspaces`` regardless of the
+    process working directory. ``REPORT_AGGREGATOR_WORKSPACE`` may override
+    the location; relative values are resolved under the project root.
+    """
+    project_root = _project_root()
     env = os.environ.get("REPORT_AGGREGATOR_WORKSPACE")
     if env:
-        root = Path(env)
+        configured = Path(env)
+        root = configured if configured.is_absolute() else project_root / configured
     else:
-        root = Path.cwd() / ".api_workspaces"
+        root = project_root / DEFAULT_WORKSPACE_DIRNAME
     root.mkdir(parents=True, exist_ok=True)
     return root
 

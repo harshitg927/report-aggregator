@@ -349,8 +349,10 @@ Key endpoints (all under `/api`):
 | PUT | `/reports/{id}/document` | Replace the whole document (editor); diffed into recorded patches |
 | DELETE | `/reports/{id}/edits/{index}` | Undo an edit (re-merge + replay) |
 
-Workspaces are stored under `REPORT_AGGREGATOR_WORKSPACE` (default
-`./.api_workspaces`).
+Workspaces are stored under ``<report-aggregator>/.api_workspaces`` by
+default (always inside this repository, not the shell's working directory).
+Override with ``REPORT_AGGREGATOR_WORKSPACE`` (relative paths resolve under the
+project root; absolute paths are used as-is, mainly for tests).
 
 > **Security:** the service has no authentication and permissive CORS for
 > `localhost:3000`. It is intended for local development only.
