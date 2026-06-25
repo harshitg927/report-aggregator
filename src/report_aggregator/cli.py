@@ -296,32 +296,24 @@ def _handle_edit(args: argparse.Namespace) -> int:
 
     # Apply patch
     try:
-        old_value = None
-        if patch.op in ("replace", "remove"):
-            # Try to capture old value for display
-            try:
-                from report_aggregator.engine.patch import get_value_at_path, parse_json_pointer
-                tokens = parse_json_pointer(patch.path)
-                old_value = get_value_at_path(doc, tokens)
-            except:
-                pass
+        from report_aggregator.api.edit_summary import summarize_patch, value_at_path
+
+        old_value = value_at_path(doc, patch.path)
 
         doc = apply_patch(doc, patch)
 
         print("✓ Edit applied successfully")
         print(f"  Operation: {patch.op}")
         print(f"  Path: {patch.path}")
-        if old_value is not None:
-            print(f"  Old value: {old_value}")
-        if patch.value is not None:
-            print(f"  New value: {patch.value}")
+        summary = summarize_patch(patch, old_value=old_value)
+        print(f"  Change: {summary}")
 
     except PatchError as e:
         print(f"Error applying patch: {e}", file=sys.stderr)
         return 1
 
     # Add edit to provenance
-    provenance.add_edit(who=who, patch=patch, reason=reason)
+    provenance.add_edit(who=who, patch=patch, reason=reason, summary=summary)
 
     # Write updated files
     try:
@@ -370,7 +362,9 @@ def _handle_list_edits(args: argparse.Namespace) -> int:
         print(f"{i}. [{edit_entry.when}] {edit_entry.who}")
         print(f"   Operation: {edit_entry.patch.op}")
         print(f"   Path: {edit_entry.patch.path}")
-        if edit_entry.patch.value is not None:
+        if edit_entry.summary:
+            print(f"   Change: {edit_entry.summary}")
+        elif edit_entry.patch.value is not None:
             print(f"   Value: {edit_entry.patch.value}")
         if edit_entry.patch.from_:
             print(f"   From: {edit_entry.patch.from_}")
@@ -437,7 +431,7 @@ def _handle_replay(args: argparse.Namespace) -> int:
     """Handle the 'replay' subcommand."""
     import json
 
-    from report_aggregator.engine.patch import PatchError, apply_patches
+    from report_aggregator.engine.patch import PatchError, apply_document_patch
     from report_aggregator.engine.provenance import ProvenanceTracker
 
     merged_file: Path = args.merged_file
@@ -491,7 +485,7 @@ def _handle_replay(args: argparse.Namespace) -> int:
     failed = 0
     for i, edit_entry in enumerate(provenance.edits, 1):
         try:
-            doc = apply_patches(doc, [edit_entry.patch])
+            doc = apply_document_patch(doc, edit_entry.patch, adapter.load)
             print(f"  {i}. ✓ {edit_entry.patch.op} {edit_entry.patch.path}")
         except PatchError as e:
             print(f"  {i}. ✗ {edit_entry.patch.op} {edit_entry.patch.path}: {e}")

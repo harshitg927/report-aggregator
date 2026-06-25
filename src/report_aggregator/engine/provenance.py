@@ -40,6 +40,7 @@ class EditEntry:
     when: str  # ISO 8601 timestamp
     patch: Patch  # The RFC-6902 operation
     reason: str = ""  # Optional: why the edit was made
+    summary: str = ""  # Short human-readable change for UI/CLI display
 
 
 @dataclass
@@ -112,13 +113,20 @@ class ProvenanceTracker:
             )
         )
 
-    def add_edit(self, who: str, patch: Patch, reason: str = "") -> None:
+    def add_edit(
+        self,
+        who: str,
+        patch: Patch,
+        reason: str = "",
+        summary: str = "",
+    ) -> None:
         """Add a user edit to the provenance history.
 
         Args:
             who: User identifier (email or username)
             patch: The RFC-6902 patch operation
             reason: Optional explanation for the edit
+            summary: Optional short description of what changed (for display)
         """
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         self.edits.append(
@@ -127,6 +135,7 @@ class ProvenanceTracker:
                 when=timestamp,
                 patch=patch,
                 reason=reason,
+                summary=summary,
             )
         )
 
@@ -176,6 +185,7 @@ class ProvenanceTracker:
                         "from": e.patch.from_,
                     },
                     "reason": e.reason,
+                    "summary": e.summary,
                 }
                 for e in self.edits
             ],
@@ -235,6 +245,7 @@ class ProvenanceTracker:
                     when=e["when"],
                     patch=patch,
                     reason=e.get("reason", ""),
+                    summary=e.get("summary", ""),
                 )
             )
         return tracker

@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from report_aggregator.api import fieldtree, storage
 from report_aggregator.api.diffpatch import build_patches
+from report_aggregator.api.edit_summary import summarize_patch, value_at_path
 from report_aggregator.api.storage import AggregateMeta, InputMeta
 from report_aggregator.engine.mapping import MappingError, load_mapping
 from report_aggregator.engine.merge import InputFile, merge_reports
@@ -323,6 +324,7 @@ def apply_edit(aggregate_id: str, body: EditRequest):
 
     merged_file = storage.merged_path(aggregate_id, meta)
     doc = adapter.load(merged_file.read_bytes())
+    old_value = value_at_path(doc, patch.path)
 
     try:
         doc = apply_patch(doc, patch)
@@ -333,7 +335,12 @@ def apply_edit(aggregate_id: str, body: EditRequest):
     sidecar = storage.sidecar_path(aggregate_id, meta)
     prov_data = json.loads(sidecar.read_text(encoding="utf-8"))
     provenance = ProvenanceTracker.from_dict(prov_data)
-    provenance.add_edit(who=body.who, patch=patch, reason=body.reason)
+    provenance.add_edit(
+        who=body.who,
+        patch=patch,
+        reason=body.reason,
+        summary=summarize_patch(patch, old_value=old_value),
+    )
 
     merged_file.write_bytes(adapter.render(doc))
     provenance.write_sidecar(merged_file)
@@ -365,6 +372,7 @@ def replace_document(aggregate_id: str, body: DocumentRequest):
 
     merged_file = storage.merged_path(aggregate_id, meta)
     old_doc = adapter.load(merged_file.read_bytes())
+    old_text = merged_file.read_text(encoding="utf-8")
 
     # Validate the edited content by parsing it with the adapter.
     try:
@@ -372,14 +380,24 @@ def replace_document(aggregate_id: str, body: DocumentRequest):
     except Exception as exc:  # noqa: BLE001 - surface parse/validation errors
         raise HTTPException(status_code=422, detail=f"Invalid document: {exc}")
 
-    patches = build_patches(old_doc, new_doc)
+    patches = build_patches(old_doc, new_doc, raw_new=body.content)
 
     # Record each patch in the edit layer, then persist the user's exact text.
     sidecar = storage.sidecar_path(aggregate_id, meta)
     prov_data = json.loads(sidecar.read_text(encoding="utf-8"))
     provenance = ProvenanceTracker.from_dict(prov_data)
     for patch in patches:
-        provenance.add_edit(who=body.who, patch=patch, reason=body.reason)
+        provenance.add_edit(
+            who=body.who,
+            patch=patch,
+            reason=body.reason,
+            summary=summarize_patch(
+                patch,
+                old_text=old_text,
+                new_text=body.content,
+                old_value=value_at_path(old_doc, patch.path),
+            ),
+        )
 
     merged_file.write_bytes(body.content.encode("utf-8"))
     provenance.write_sidecar(merged_file)

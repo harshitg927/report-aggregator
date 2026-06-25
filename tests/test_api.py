@@ -13,6 +13,8 @@ FIXTURES = Path(__file__).parent / "fixtures" / "fossology-reports"
 CDX_A = FIXTURES / "CYCLONEDX_JSON_zlib132.zip.json"
 CDX_B = FIXTURES / "CYCLONEDX_JSON_fckeditor-2.4.8.zip.json"
 SPDX_A = FIXTURES / "SPDX2TV_zlib132.zip.spdx"
+CLIXML_A = FIXTURES / "CLIXML_zlib132.zip.xml"
+CLIXML_B = FIXTURES / "CLIXML_fckeditor-2.4.8.zip.xml"
 
 
 @pytest.fixture()
@@ -28,6 +30,19 @@ def _merge_cdx(client) -> str:
             files=[
                 ("files", (CDX_A.name, a, "application/json")),
                 ("files", (CDX_B.name, b, "application/json")),
+            ],
+        )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["aggregate_id"]
+
+
+def _merge_clixml(client) -> str:
+    with CLIXML_A.open("rb") as a, CLIXML_B.open("rb") as b:
+        resp = client.post(
+            "/api/merge",
+            files=[
+                ("files", (CLIXML_A.name, a, "application/xml")),
+                ("files", (CLIXML_B.name, b, "application/xml")),
             ],
         )
     assert resp.status_code == 200, resp.text
@@ -213,3 +228,24 @@ def test_document_editor_rejects_invalid_content(client):
         json={"content": "{ not valid json", "who": "x"},
     )
     assert resp.status_code == 422
+
+
+def test_document_editor_save_clixml(client):
+    agg_id = _merge_clixml(client)
+    raw = client.get(f"/api/reports/{agg_id}/raw").text
+    new_content = raw.replace(
+        "<ComponentName>NA</ComponentName>",
+        "<ComponentName>EDITED-VIA-EDITOR</ComponentName>",
+        1,
+    )
+
+    resp = client.put(
+        f"/api/reports/{agg_id}/document",
+        json={"content": new_content, "who": "editor@test", "reason": "clixml edit"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    edits = client.get(f"/api/reports/{agg_id}/edits").json()["edits"]
+    assert len(edits) >= 1
+    assert edits[-1]["who"] == "editor@test"
+    assert "EDITED-VIA-EDITOR" in client.get(f"/api/reports/{agg_id}/raw").text
