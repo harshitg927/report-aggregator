@@ -11,7 +11,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import PlainTextResponse, Response
 from pydantic import BaseModel
 
-from report_aggregator.api import fieldtree, storage
+from report_aggregator.api import diffview, fieldtree, storage
 from report_aggregator.api.diffpatch import build_patches
 from report_aggregator.api.edit_summary import summarize_patch, value_at_path
 from report_aggregator.api.storage import AggregateMeta, InputMeta
@@ -234,6 +234,121 @@ def get_input_raw(aggregate_id: str, idx: int):
     if not path.exists():
         raise HTTPException(status_code=404, detail="Input file missing")
     return PlainTextResponse(path.read_bytes().decode("utf-8", errors="replace"))
+
+
+def _resolve_source_path(meta: AggregateMeta, aggregate_id: str, source: str) -> Path:
+    """Resolve a ``merged``/``input:<idx>`` source spec to an existing path."""
+    try:
+        path = diffview.resolve_source(meta, aggregate_id, source)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Source file missing: {source}")
+    return path
+
+
+@router.get("/reports/{aggregate_id}/raw/meta")
+def get_raw_meta(aggregate_id: str, source: str = "merged"):
+    """Return ``{size, total_lines}`` for a source without loading it."""
+    meta = _require_meta(aggregate_id)
+    path = _resolve_source_path(meta, aggregate_id, source)
+    return {"source": source, **diffview.source_meta(aggregate_id, path)}
+
+
+@router.get("/reports/{aggregate_id}/raw/lines")
+def get_raw_lines(
+    aggregate_id: str,
+    source: str = "merged",
+    start: int = 0,
+    count: int = 200,
+):
+    """Return a window of lines from a source via the cached line index."""
+    if count <= 0 or count > 5000:
+        raise HTTPException(status_code=400, detail="count must be in 1..5000")
+    if start < 0:
+        raise HTTPException(status_code=400, detail="start must be >= 0")
+    meta = _require_meta(aggregate_id)
+    path = _resolve_source_path(meta, aggregate_id, source)
+    offsets = diffview.get_line_index(aggregate_id, path)
+    lines, total = diffview.read_lines(path, offsets, start, count)
+    return {
+        "source": source,
+        "start": start,
+        "count": len(lines),
+        "total_lines": total,
+        "lines": lines,
+    }
+
+
+@router.get("/reports/{aggregate_id}/diff/meta")
+def get_diff_meta(aggregate_id: str, left: str = "merged", right: str = "merged"):
+    """Compute (and cache) the diff between two sources; return summary stats."""
+    meta = _require_meta(aggregate_id)
+    # Validate sources up front for clear 4xx errors.
+    _resolve_source_path(meta, aggregate_id, left)
+    _resolve_source_path(meta, aggregate_id, right)
+    model = diffview.get_diff_model(meta, aggregate_id, left, right)
+    return {"left": left, "right": right, **diffview.diff_meta(model)}
+
+
+@router.get("/reports/{aggregate_id}/diff/rows")
+def get_diff_rows(
+    aggregate_id: str,
+    left: str = "merged",
+    right: str = "merged",
+    start: int = 0,
+    count: int = 200,
+):
+    """Return a window of aligned diff rows for the given source pair."""
+    if count <= 0 or count > 5000:
+        raise HTTPException(status_code=400, detail="count must be in 1..5000")
+    if start < 0:
+        raise HTTPException(status_code=400, detail="start must be >= 0")
+    meta = _require_meta(aggregate_id)
+    left_path = _resolve_source_path(meta, aggregate_id, left)
+    right_path = _resolve_source_path(meta, aggregate_id, right)
+    model = diffview.get_diff_model(meta, aggregate_id, left, right)
+    left_offsets = diffview.get_line_index(aggregate_id, left_path)
+    right_offsets = diffview.get_line_index(aggregate_id, right_path)
+    rows, total = diffview.diff_rows(
+        model, left_path, left_offsets, right_path, right_offsets, start, count
+    )
+    return {
+        "left": left,
+        "right": right,
+        "start": start,
+        "count": len(rows),
+        "total_rows": total,
+        "rows": rows,
+    }
+
+
+@router.get("/reports/{aggregate_id}/diff/search")
+def search_diff(
+    aggregate_id: str,
+    left: str = "merged",
+    right: str = "merged",
+    q: str = "",
+    case_sensitive: bool = False,
+    limit: int = diffview.SEARCH_DEFAULT_LIMIT,
+):
+    """Find lines matching ``q`` in either diff side; return row positions."""
+    if not q:
+        raise HTTPException(status_code=400, detail="q must not be empty")
+    if limit <= 0 or limit > 5000:
+        raise HTTPException(status_code=400, detail="limit must be in 1..5000")
+    meta = _require_meta(aggregate_id)
+    left_path = _resolve_source_path(meta, aggregate_id, left)
+    right_path = _resolve_source_path(meta, aggregate_id, right)
+    model = diffview.get_diff_model(meta, aggregate_id, left, right)
+    left_offsets = diffview.get_line_index(aggregate_id, left_path)
+    right_offsets = diffview.get_line_index(aggregate_id, right_path)
+    return diffview.search_diff(
+        model, left_path, left_offsets, right_path, right_offsets,
+        query=q, case_sensitive=case_sensitive, limit=limit,
+    )
 
 
 _MEDIA_TYPES = {
