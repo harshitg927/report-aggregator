@@ -65,3 +65,29 @@ def test_document_patch_reloads_raw_text():
     result = apply_document_patch(old, patch, load)
     assert len(result) == 1
     assert result[0].tag == "b"
+
+
+def test_verify_false_still_returns_granular_patches():
+    """verify=False skips the deepcopy re-check but still returns granular patches."""
+    old = {"a": 1, "b": "hello", "c": [1, 2, 3]}
+    new = {"a": 2, "b": "hello", "c": [1, 2, 3, 4]}
+    patches_verified = build_patches(old, new, verify=True)
+    patches_unverified = build_patches(old, new, verify=False)
+    # Both should produce the same granular patches.
+    assert len(patches_unverified) == len(patches_verified)
+    for pv, pu in zip(patches_verified, patches_unverified):
+        assert pv.op == pu.op
+        assert pv.path == pu.path
+
+
+def test_verify_false_no_change_yields_no_patches():
+    assert build_patches({"x": 1}, {"x": 1}, verify=False) == []
+
+
+def test_verify_false_non_json_falls_back_to_raw():
+    import xml.etree.ElementTree as ET
+    old = [ET.Element("A")]
+    new = [ET.Element("B")]
+    patches = build_patches(old, new, raw_new="<B/>", verify=False)
+    assert len(patches) == 1
+    assert patches[0].value == "<B/>"

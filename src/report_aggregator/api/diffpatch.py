@@ -95,7 +95,7 @@ def _content_replace_patch(raw_new: str) -> list[Patch]:
     return [Patch(op="replace", path="/", value=raw_new)]
 
 
-def build_patches(old: Any, new: Any, raw_new: str | None = None) -> list[Patch]:
+def build_patches(old: Any, new: Any, raw_new: str | None = None, verify: bool = True) -> list[Patch]:
     """Diff old->new and verify the patches reproduce ``new``.
 
     Falls back to a single root replace if the granular diff does not
@@ -104,6 +104,14 @@ def build_patches(old: Any, new: Any, raw_new: str | None = None) -> list[Patch]
     When ``raw_new`` is provided and native structures are not JSON-serializable
     (e.g. CLIXML ``Element`` trees), the fallback stores the edited text so the
     provenance sidecar can be written and edits replay on re-merge.
+
+    Args:
+        verify: When True (default) the computed patches are re-applied against
+            a deep-copy of ``old`` and compared to ``new`` to guarantee
+            correctness.  Pass ``verify=False`` for very large documents where
+            the deepcopy would consume excessive memory — the granular patches
+            are still computed and recorded; only the post-apply confirmation
+            step is skipped.
     """
     patches = diff_to_patches(old, new)
     if not patches:
@@ -113,6 +121,9 @@ def build_patches(old: Any, new: Any, raw_new: str | None = None) -> list[Patch]
         if raw_new is not None:
             return _content_replace_patch(raw_new)
         patches = [Patch(op="replace", path="/", value=copy.deepcopy(new))]
+
+    if not verify:
+        return patches
 
     try:
         check = apply_patches(copy.deepcopy(old), copy.deepcopy(patches))

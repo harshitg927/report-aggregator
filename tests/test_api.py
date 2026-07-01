@@ -678,3 +678,77 @@ def test_diff_search_validation(client):
     assert client.get(
         f"/api/reports/{agg_id}/diff/search", params={"q": "x", "left": "bogus"}
     ).status_code == 400
+
+
+# --------------------------------------------------------------------------- #
+# Large-document save: memory-safe verify=False path
+# --------------------------------------------------------------------------- #
+
+
+def test_large_document_save_records_granular_patches(client, monkeypatch):
+    """When content exceeds REPORT_AGGREGATOR_DIFF_VERIFY_MAX_BYTES the save still
+    records granular patches (verify=False skips only the deepcopy re-check)."""
+    # Force the threshold to 1 byte so *any* save triggers the large-file path.
+    monkeypatch.setenv("REPORT_AGGREGATOR_DIFF_VERIFY_MAX_BYTES", "1")
+
+    agg_id = _merge_cdx(client)
+    import json as _json
+
+    raw = client.get(f"/api/reports/{agg_id}/raw").text
+    doc = _json.loads(raw)
+    doc["components"][0]["name"] = "LARGE-DOC-EDIT"
+    new_content = _json.dumps(doc, indent=4)
+
+    resp = client.put(
+        f"/api/reports/{agg_id}/document",
+        json={"content": new_content, "who": "large-test"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # Granular patches were recorded (not just a single root replace due to OOM).
+    assert body["changes"] >= 1
+
+    edits = client.get(f"/api/reports/{agg_id}/edits").json()["edits"]
+    assert any(e["who"] == "large-test" for e in edits)
+    # At least one edit should reference a field path (granular, not root "/").
+    assert any(
+        e.get("patch", {}).get("path", "/") != "/"
+        for e in edits
+        if e.get("who") == "large-test"
+    )
+
+    # Field tree reflects the edit.
+    tree = client.get(f"/api/reports/{agg_id}/fields").json()
+    node = next(n for n in tree["nodes"] if n["path"] == "/components/0/name")
+    assert node["value"] == "LARGE-DOC-EDIT"
+
+
+def test_large_document_save_still_validates(client, monkeypatch):
+    """Validation (adapter.load) always runs even on the large-file path."""
+    monkeypatch.setenv("REPORT_AGGREGATOR_DIFF_VERIFY_MAX_BYTES", "1")
+    agg_id = _merge_cdx(client)
+    resp = client.put(
+        f"/api/reports/{agg_id}/document",
+        json={"content": "{ not valid json at all !!!", "who": "x"},
+    )
+    assert resp.status_code == 422
+
+
+def test_small_document_save_uses_verified_path(client, monkeypatch):
+    """Below the threshold the original verify=True path runs unchanged."""
+    # Very large threshold: all CDX fixtures are well below 100 MB.
+    monkeypatch.setenv("REPORT_AGGREGATOR_DIFF_VERIFY_MAX_BYTES", str(100 * 1024 * 1024))
+    agg_id = _merge_cdx(client)
+    import json as _json
+
+    raw = client.get(f"/api/reports/{agg_id}/raw").text
+    doc = _json.loads(raw)
+    doc["components"][0]["name"] = "VERIFIED-EDIT"
+    new_content = _json.dumps(doc, indent=4)
+
+    resp = client.put(
+        f"/api/reports/{agg_id}/document",
+        json={"content": new_content, "who": "small-test"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["changes"] >= 1

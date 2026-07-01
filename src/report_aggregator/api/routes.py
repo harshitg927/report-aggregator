@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -476,6 +477,11 @@ def replace_document(aggregate_id: str, body: DocumentRequest):
     The edited text is validated by the format adapter, diffed against the
     current document, and the difference is recorded as RFC-6902 patches in the
     edit layer so the change stays transparent and replays on re-merge.
+
+    For large documents (content exceeds ``REPORT_AGGREGATOR_DIFF_VERIFY_MAX_BYTES``,
+    default 25 MB) the post-apply deepcopy re-verification step inside
+    ``build_patches`` is skipped to avoid excessive memory usage.  Granular
+    patches and full validation are always performed regardless of size.
     """
     meta = _require_meta(aggregate_id)
 
@@ -495,7 +501,11 @@ def replace_document(aggregate_id: str, body: DocumentRequest):
     except Exception as exc:  # noqa: BLE001 - surface parse/validation errors
         raise HTTPException(status_code=422, detail=f"Invalid document: {exc}")
 
-    patches = build_patches(old_doc, new_doc, raw_new=body.content)
+    # For large documents skip the deepcopy re-verification step to avoid OOM.
+    _verify_max = int(os.environ.get("REPORT_AGGREGATOR_DIFF_VERIFY_MAX_BYTES", 25 * 1024 * 1024))
+    verify = len(body.content) <= _verify_max
+
+    patches = build_patches(old_doc, new_doc, raw_new=body.content, verify=verify)
 
     # Record each patch in the edit layer, then persist the user's exact text.
     sidecar = storage.sidecar_path(aggregate_id, meta)

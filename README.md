@@ -354,6 +354,15 @@ default (always inside this repository, not the shell's working directory).
 Override with ``REPORT_AGGREGATOR_WORKSPACE`` (relative paths resolve under the
 project root; absolute paths are used as-is, mainly for tests).
 
+The interactive editor save path (``PUT /reports/{id}/document``) validates and
+structurally diffs every save regardless of size.  For very large documents the
+post-apply deepcopy re-verification step is skipped to avoid excessive memory
+usage; only the verification is skipped — the granular RFC-6902 patches are
+always computed and recorded in provenance.  The threshold is controlled by:
+
+``REPORT_AGGREGATOR_DIFF_VERIFY_MAX_BYTES`` — content larger than this (bytes)
+skips the deepcopy re-check.  Default: ``26214400`` (25 MB).
+
 > **Security:** the service has no authentication and permissive CORS for
 > `localhost:3000`. It is intended for local development only.
 
