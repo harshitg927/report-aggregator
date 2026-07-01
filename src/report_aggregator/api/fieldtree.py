@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from report_aggregator.adapters.base import Entry, EntryKind
 from report_aggregator.engine.mapping import load_mapping
 from report_aggregator.formats import get_adapter_registry
 
@@ -50,20 +51,44 @@ def load_adapter_and_doc(fmt: str, raw: bytes):
     return adapter, doc
 
 
+def _spdx2tv_identity_entries(doc: dict) -> list[Entry]:
+    """Yield lightweight entries for SPDX2TV containers without relationship scan."""
+    entries: list[Entry] = []
+    for p in doc.get("packages", []):
+        if isinstance(p, dict):
+            entries.append(Entry(data=p, kind=EntryKind.PACKAGE, source_id=""))
+    for f in doc.get("files", []):
+        if isinstance(f, dict):
+            entries.append(Entry(data=f, kind=EntryKind.FILE, source_id=""))
+    for lic in doc.get("extracted_licensing_info", []):
+        if isinstance(lic, dict):
+            entries.append(Entry(data=lic, kind=EntryKind.LICENSE_TEXT, source_id=""))
+    return entries
+
+
 def build_identity_map(adapter, doc) -> dict[int, str]:
     """Map id(entry_container) -> identity_key for dict-shaped entries."""
     identity_map: dict[int, str] = {}
-    try:
-        entries = list(adapter.entries(doc))
-    except Exception:
-        return identity_map
-    for entry in entries:
+
+    def _record(entry: Entry) -> None:
         if not isinstance(entry.data, dict):
-            continue
+            return
         try:
             identity_map[id(entry.data)] = adapter.identity(entry)
         except Exception:
-            continue
+            return
+
+    # SPDX2TV fast path: identity() only needs checksums/text, not _relationships.
+    if isinstance(doc, dict) and ("packages" in doc or "files" in doc):
+        for entry in _spdx2tv_identity_entries(doc):
+            _record(entry)
+        return identity_map
+
+    try:
+        for entry in adapter.entries(doc):
+            _record(entry)
+    except Exception:
+        pass
     return identity_map
 
 

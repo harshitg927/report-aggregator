@@ -12,7 +12,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import PlainTextResponse, Response
 from pydantic import BaseModel
 
-from report_aggregator.api import diffview, fieldtree, storage
+from report_aggregator.api import diffview, fieldtree_cache, storage
 from report_aggregator.api.diffpatch import build_patches
 from report_aggregator.api.edit_summary import summarize_patch, value_at_path
 from report_aggregator.api.storage import AggregateMeta, InputMeta
@@ -103,6 +103,7 @@ def _run_merge(meta: AggregateMeta) -> None:
 
     out_path.write_bytes(result.output_bytes)
     result.provenance.write_sidecar(out_path)
+    fieldtree_cache.warm(meta.aggregate_id, meta)
 
 
 # --------------------------------------------------------------------------- #
@@ -209,10 +210,8 @@ def get_report(aggregate_id: str):
 @router.get("/reports/{aggregate_id}/fields")
 def get_fields(aggregate_id: str):
     meta = _require_meta(aggregate_id)
-    raw = storage.merged_path(aggregate_id, meta).read_bytes()
-    prov = storage.load_provenance(aggregate_id, meta)
     try:
-        tree = fieldtree.build_field_tree(meta.format, raw, prov)
+        tree = fieldtree_cache.get_or_build(aggregate_id, meta)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"Failed to build field tree: {exc}")
     return tree
@@ -460,6 +459,7 @@ def apply_edit(aggregate_id: str, body: EditRequest):
 
     merged_file.write_bytes(adapter.render(doc))
     provenance.write_sidecar(merged_file)
+    fieldtree_cache.warm(aggregate_id, meta)
 
     return {"ok": True, **_summary(meta)}
 
@@ -526,6 +526,7 @@ def replace_document(aggregate_id: str, body: DocumentRequest):
 
     merged_file.write_bytes(body.content.encode("utf-8"))
     provenance.write_sidecar(merged_file)
+    fieldtree_cache.warm(aggregate_id, meta)
 
     return {"ok": True, "changes": len(patches), **_summary(meta)}
 

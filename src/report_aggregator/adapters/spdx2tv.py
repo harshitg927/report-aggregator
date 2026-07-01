@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 import uuid
+from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
@@ -180,23 +181,25 @@ class SPDX2TVAdapter(FormatAdapter):
     def entries(self, doc: dict) -> Iterable[Entry]:
         """Normalize multi-package input into flat entries."""
         all_relationships = doc.get("relationships", [])
+        by_id: dict[str, list[dict]] = defaultdict(list)
+        for r in all_relationships:
+            elem = r.get("spdxElementId")
+            related = r.get("relatedSpdxElement")
+            if elem:
+                by_id[elem].append(r)
+            if related and related != elem:
+                by_id[related].append(r)
 
         for p in doc.get("packages", []):
             pkg_id = p.get("SPDXID")
             if pkg_id:
-                p["_relationships"] = [
-                    r for r in all_relationships
-                    if r["spdxElementId"] == pkg_id or r["relatedSpdxElement"] == pkg_id
-                ]
+                p["_relationships"] = by_id.get(pkg_id, [])
             yield Entry(data=p, kind=EntryKind.PACKAGE, source_id="")
             
         for f in doc.get("files", []):
             file_id = f.get("SPDXID")
             if file_id:
-                f["_relationships"] = [
-                    r for r in all_relationships
-                    if r["spdxElementId"] == file_id or r["relatedSpdxElement"] == file_id
-                ]
+                f["_relationships"] = by_id.get(file_id, [])
             yield Entry(data=f, kind=EntryKind.FILE, source_id="")
             
         for lic in doc.get("extracted_licensing_info", []):

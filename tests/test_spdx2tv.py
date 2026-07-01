@@ -205,3 +205,64 @@ def test_spdx2tv_merge(spdx2fckeditor_path: Path, spdx2zlib_path: Path):
     prov = result.provenance
     assert len(prov.inputs) == 2
     assert len(prov.conflicts) >= 0  # May be 0 if no names differ
+
+
+def test_spdx2tv_entries_relationship_indexing():
+    """entries() should attach relationships via O(1) index, not per-entry scan."""
+    mapping = load_mapping("spdx2tv")
+    adapter = SPDX2TVAdapter(mapping)
+
+    relationships = []
+    packages = []
+    files = []
+    for i in range(50):
+        pkg_id = f"SPDXRef-pkg-{i}"
+        packages.append({"SPDXID": pkg_id, "PackageName": f"pkg-{i}", "checksums": {"SHA1": f"{i:040x}"}})
+        relationships.append({
+            "spdxElementId": pkg_id,
+            "relatedSpdxElement": "SPDXRef-DOCUMENT",
+            "type": "DESCRIBES",
+        })
+    for i in range(50):
+        file_id = f"SPDXRef-file-{i}"
+        files.append({
+            "SPDXID": file_id,
+            "FileName": f"file-{i}.txt",
+            "checksums": {"SHA1": f"{i+100:040x}"},
+        })
+        relationships.append({
+            "spdxElementId": file_id,
+            "relatedSpdxElement": packages[i % 50]["SPDXID"],
+            "type": "CONTAINS",
+        })
+
+    doc = {
+        "document": {"SPDXID": "SPDXRef-DOCUMENT"},
+        "packages": packages,
+        "files": files,
+        "relationships": relationships,
+        "extracted_licensing_info": [],
+        "other": [],
+    }
+
+    entries = list(adapter.entries(doc))
+    pkg_entries = [e for e in entries if e.kind.value == "package"]
+    file_entries = [e for e in entries if e.kind.value == "file"]
+    assert len(pkg_entries) == 50
+    assert len(file_entries) == 50
+
+    for entry in pkg_entries:
+        pkg_id = entry.data["SPDXID"]
+        rels = entry.data["_relationships"]
+        types = {r["type"] for r in rels}
+        assert "DESCRIBES" in types
+        assert any(
+            r["spdxElementId"] == pkg_id or r["relatedSpdxElement"] == pkg_id for r in rels
+        )
+
+    for entry in file_entries:
+        file_id = entry.data["SPDXID"]
+        rels = entry.data["_relationships"]
+        assert len(rels) == 1
+        assert rels[0]["spdxElementId"] == file_id
+        assert rels[0]["type"] == "CONTAINS"

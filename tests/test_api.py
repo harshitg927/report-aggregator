@@ -442,6 +442,52 @@ def test_diff_model_cached_and_invalidated(client):
     assert new_cache.exists()
 
 
+def test_field_tree_cached_and_invalidated(client):
+    from report_aggregator.api import fieldtree_cache, storage
+
+    agg_id = _merge_cdx(client)
+    meta_obj = storage.read_meta(agg_id)
+    merged = storage.merged_path(agg_id, meta_obj)
+    sidecar = storage.sidecar_path(agg_id, meta_obj)
+
+    # Merge pre-warms the cache; first fields read should not rewrite it.
+    cache_path = fieldtree_cache.cache_path(agg_id, merged, sidecar)
+    assert cache_path.exists()
+    first_mtime = cache_path.stat().st_mtime_ns
+
+    client.get(f"/api/reports/{agg_id}/fields")
+    assert cache_path.stat().st_mtime_ns == first_mtime
+
+    # Second read is still served from the same cache file.
+    client.get(f"/api/reports/{agg_id}/fields")
+    assert cache_path.stat().st_mtime_ns == first_mtime
+
+    # Editing rewrites merged output + sidecar -> new cache key.
+    tree = client.get(f"/api/reports/{agg_id}/fields").json()
+    leaf = _first_string_leaf(tree)
+    client.post(
+        f"/api/reports/{agg_id}/edits",
+        json={
+            "op": "replace",
+            "path": leaf["path"],
+            "value": "CACHE-INVALIDATION-TEST",
+            "who": "cache-test",
+            "reason": "cache invalidation",
+        },
+    )
+
+    meta_obj = storage.read_meta(agg_id)
+    merged = storage.merged_path(agg_id, meta_obj)
+    sidecar = storage.sidecar_path(agg_id, meta_obj)
+    new_cache = fieldtree_cache.cache_path(agg_id, merged, sidecar)
+    assert new_cache != cache_path
+    assert new_cache.exists()
+
+    tree2 = client.get(f"/api/reports/{agg_id}/fields").json()
+    node = next(n for n in tree2["nodes"] if n["path"] == leaf["path"])
+    assert node["value"] == "CACHE-INVALIDATION-TEST"
+
+
 def test_compute_diff_opcodes_small(tmp_path):
     """Directly validate opcode assembly for a known small diff."""
     from report_aggregator.api import diffview
