@@ -41,3 +41,19 @@ merged.spdx
 
 # API workspace storage
 .api_workspaces/
+
+# Frontend (frontend/)
+frontend/node_modules/
+frontend/.pnp/
+frontend/.pnp.js
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/.DS_Store
+frontend/*.pem
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/.env*.local
+frontend/.vercel/
+frontend/coverage/

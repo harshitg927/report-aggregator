@@ -1,6 +1,45 @@
 # Report Aggregator
 
 Merge N FOSSology-generated reports into one deduplicated report of the same format.
+This repository is a **monorepo** containing both the Python merge/edit engine and the
+Next.js web UI.
+
+## Repository Layout
+
+```
+report-aggregator/
+├── src/report_aggregator/   # Python engine (merge, edit, provenance) + FastAPI service
+├── tests/                   # pytest suite
+├── frontend/                # Next.js front-end (report-aggregator-ui)
+│   ├── app/                 # Next.js App Router pages
+│   ├── components/          # React components
+│   ├── lib/                 # Shared utilities and API client
+│   └── README.md            # Frontend-specific documentation
+├── Makefile                 # Convenience targets (install, dev, test, lint)
+├── pyproject.toml           # Python package config
+└── README.md                # This file
+```
+
+## Quick Start (Full Stack)
+
+```bash
+# 1. Install Python engine + API extra
+pip install -e ".[api,dev]"
+
+# 2. Install frontend dependencies
+cd frontend && npm install && cd ..
+
+# 3a. Start both services together
+cd frontend && npm run dev:all
+# API → http://127.0.0.1:8000
+# UI  → http://localhost:3000
+
+# 3b. Or start them in separate terminals
+make dev-api   # terminal 1 — FastAPI service
+make dev-ui    # terminal 2 — Next.js dev server
+```
+
+See [`frontend/README.md`](frontend/README.md) for full frontend documentation.
 
 ## Features
 
@@ -321,7 +360,7 @@ Paths use [JSON Pointer](https://datatracker.ietf.org/doc/html/rfc6901) notation
 ## HTTP API (for the web UI)
 
 An optional FastAPI service exposes the merge/edit engine over HTTP for the
-[`report-aggregator-ui`](../report-aggregator-ui) front-end. It reuses the
+[`frontend/`](frontend/) Next.js front-end. It reuses the
 engine in-process (no CLI shell-out).
 
 Install the API extra and run the service:
