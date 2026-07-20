@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 const NAV_LINKS = [
   { href: "/", label: "Dashboard", exact: true },
   { href: "/merge", label: "New Merge", icon: "/assets/icons/Plus/Plus_20px.svg" },
+  { href: "/integrations", label: "Integrations" },
 ];
 
 export function Header() {

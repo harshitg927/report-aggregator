@@ -26,12 +26,12 @@ report-aggregator-api = "report_aggregator.api.__main__:main"
 dev = [
     "pytest>=7",
     "ruff",
-    "httpx",
 ]
 api = [
     "fastapi",
     "uvicorn[standard]",
     "python-multipart",
+    "httpx",
 ]
 
 [tool.hatch.build.targets.wheel]

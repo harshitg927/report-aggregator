@@ -62,6 +62,7 @@ class InputMeta:
     source_id: str
     filename: str
     input_index: int
+    origin: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -88,7 +89,15 @@ class AggregateMeta:
             format=data["format"],
             created_at=data["created_at"],
             output_filename=data["output_filename"],
-            inputs=[InputMeta(**i) for i in data.get("inputs", [])],
+            inputs=[
+                InputMeta(
+                    source_id=i["source_id"],
+                    filename=i["filename"],
+                    input_index=i["input_index"],
+                    origin=i.get("origin") or {},
+                )
+                for i in data.get("inputs", [])
+            ],
         )
 
 

@@ -39,8 +39,41 @@ async function text(path, options) {
   return res.text();
 }
 
+function queryString(params = {}) {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== "") {
+      search.set(key, value);
+    }
+  }
+  const qs = search.toString();
+  return qs ? `?${qs}` : "";
+}
+
 export const api = {
   health: () => json("/api/health"),
+
+  getIntegrationsConfig: () => json("/api/integrations/config"),
+
+  saveIntegrationsConfig: (payload) =>
+    json("/api/integrations/config", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+
+  testFossologyConnection: () =>
+    json("/api/integrations/fossology/test", { method: "POST" }),
+
+  listFossologyUploads: (params = {}) =>
+    json(`/api/integrations/fossology/uploads${queryString(params)}`),
+
+  mergeFossologyUploads: (payload) =>
+    json("/api/integrations/fossology/merge-from-uploads", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  getIntegrationJob: (jobId) => json(`/api/integrations/jobs/${jobId}`),
 
   listReports: () => json("/api/reports"),
 

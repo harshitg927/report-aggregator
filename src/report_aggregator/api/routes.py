@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +18,10 @@ from report_aggregator.api import diffview, fieldtree_cache, storage
 from report_aggregator.api.diffpatch import build_patches
 from report_aggregator.api.edit_summary import summarize_patch, value_at_path
 from report_aggregator.api.storage import AggregateMeta, InputMeta
+from report_aggregator.integrations import config as integration_config
+from report_aggregator.integrations import jobs as integration_jobs
+from report_aggregator.integrations.config import IntegrationConfigError
+from report_aggregator.integrations.fossology import FossologyApiError, FossologyClient
 from report_aggregator.engine.mapping import MappingError, load_mapping
 from report_aggregator.engine.merge import InputFile, merge_reports
 from report_aggregator.engine.patch import Patch, PatchError, apply_patch
@@ -54,7 +60,12 @@ def _summary(meta: AggregateMeta) -> dict:
         "created_at": meta.created_at,
         "output_filename": meta.output_filename,
         "inputs": [
-            {"source_id": i.source_id, "filename": i.filename, "input_index": i.input_index}
+            {
+                "source_id": i.source_id,
+                "filename": i.filename,
+                "input_index": i.input_index,
+                "origin": i.origin,
+            }
             for i in meta.inputs
         ],
         "counts": {
@@ -104,6 +115,210 @@ def _run_merge(meta: AggregateMeta) -> None:
     out_path.write_bytes(result.output_bytes)
     result.provenance.write_sidecar(out_path)
     fieldtree_cache.warm(meta.aggregate_id, meta)
+
+
+# --------------------------------------------------------------------------- #
+# Integrations
+# --------------------------------------------------------------------------- #
+
+
+class FossologyConfigRequest(BaseModel):
+    base_url: str = ""
+    token: str | None = None
+    group_name: str | None = None
+    folder_id: int | None = None
+    verify_tls: bool = True
+    timeout_seconds: float = integration_config.DEFAULT_TIMEOUT_SECONDS
+
+
+class FossologyMergeRequest(BaseModel):
+    upload_ids: list[int]
+    report_format: str
+
+
+def _model_payload(model: BaseModel) -> dict:
+    if hasattr(model, "model_dump"):
+        return model.model_dump(exclude_unset=True)
+    return model.dict(exclude_unset=True)
+
+
+def _integration_error(exc: Exception, status_code: int | None = None) -> dict:
+    return {
+        "ok": False,
+        "status_code": status_code,
+        "error": str(exc),
+    }
+
+
+def _require_fossology_client() -> FossologyClient:
+    try:
+        cfg = integration_config.load_fossology_config()
+        return FossologyClient(cfg)
+    except IntegrationConfigError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+def _upload_name(upload: dict, upload_id: int) -> str:
+    for key in ("uploadName", "name", "filename", "description"):
+        value = upload.get(key)
+        if value:
+            return str(value)
+    return f"upload-{upload_id}"
+
+
+def _safe_filename(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", value.strip()).strip("._")
+    return cleaned or "upload"
+
+
+def _merge_fossology_uploads(upload_ids: list[int], report_format: str, handle) -> str:
+    client = _require_fossology_client()
+    aggregate_id = str(uuid.uuid4())
+    aggregate_path = storage.aggregate_dir(aggregate_id)
+    in_dir = storage.inputs_dir(aggregate_id)
+    in_dir.mkdir(parents=True, exist_ok=True)
+
+    input_metas: list[InputMeta] = []
+    used_stems: set[str] = set()
+    ext = storage.FORMAT_EXTENSION.get(report_format, ".out")
+
+    try:
+        for idx, upload_id in enumerate(upload_ids):
+            upload = client.get_upload(upload_id)
+            name = _upload_name(upload, upload_id)
+            scheduled = client.schedule_report(upload_id, report_format)
+            content = client.wait_for_report(scheduled.job_id)
+            if not content.strip():
+                raise FossologyApiError(f"Downloaded report for upload {upload_id} was empty")
+
+            stem = _safe_filename(name)
+            if stem in used_stems:
+                stem = f"{stem}_{idx}"
+            used_stems.add(stem)
+            filename = f"{stem}_{upload_id}_{scheduled.job_id}{ext}"
+            dest = in_dir / filename
+            dest.write_bytes(content)
+
+            detected = detect_format([dest])
+            if detected != report_format:
+                raise FossologyApiError(
+                    f"Downloaded report for upload {upload_id} is not valid {report_format} content"
+                )
+
+            input_metas.append(
+                InputMeta(
+                    source_id=stem,
+                    filename=filename,
+                    input_index=idx,
+                    origin={
+                        "system": "fossology",
+                        "base_url": client.config.base_url,
+                        "upload_id": upload_id,
+                        "upload_name": name,
+                        "report_job_id": scheduled.job_id,
+                        "report_format": report_format,
+                    },
+                )
+            )
+            handle.update(completed=idx + 1)
+
+        meta = AggregateMeta(
+            aggregate_id=aggregate_id,
+            format=report_format,
+            created_at=_now(),
+            output_filename=f"merged{ext}",
+            inputs=input_metas,
+        )
+        _run_merge(meta)
+        storage.write_meta(meta)
+        return aggregate_id
+    except Exception:
+        shutil.rmtree(aggregate_path, ignore_errors=True)
+        raise
+
+
+@router.get("/integrations/config")
+def get_integrations_config():
+    cfg = integration_config.load_fossology_config()
+    return {"fossology": cfg.redacted()}
+
+
+@router.put("/integrations/config")
+def put_integrations_config(body: FossologyConfigRequest):
+    try:
+        cfg = integration_config.save_fossology_config(_model_payload(body))
+    except (IntegrationConfigError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"fossology": cfg.redacted()}
+
+
+@router.post("/integrations/fossology/test")
+def test_fossology_connection():
+    try:
+        client = _require_fossology_client()
+        result = client.test_connection()
+    except FossologyApiError as exc:
+        return _integration_error(exc, exc.status_code)
+    except HTTPException as exc:
+        return _integration_error(Exception(str(exc.detail)), exc.status_code)
+    return {"ok": True, "message": "Connection successful", **result}
+
+
+@router.get("/integrations/fossology/uploads")
+def list_fossology_uploads(
+    folder_id: int | None = None,
+    recursive: bool | None = None,
+    name: str | None = None,
+    status: str | None = None,
+    page: int | None = None,
+    limit: int | None = None,
+):
+    client = _require_fossology_client()
+    params = {}
+    if folder_id is not None:
+        params["folderId"] = folder_id
+    elif client.config.folder_id is not None:
+        params["folderId"] = client.config.folder_id
+    if recursive is not None:
+        params["recursive"] = str(recursive).lower()
+    if name:
+        params["name"] = name
+    if status:
+        params["status"] = status
+    if page is not None:
+        params["page"] = page
+    if limit is not None:
+        params["limit"] = limit
+    try:
+        return client.list_uploads(params)
+    except FossologyApiError as exc:
+        raise HTTPException(status_code=exc.status_code or 502, detail=str(exc))
+
+
+@router.post("/integrations/fossology/merge-from-uploads")
+def merge_from_fossology_uploads(body: FossologyMergeRequest):
+    upload_ids = [int(upload_id) for upload_id in body.upload_ids]
+    if len(upload_ids) < 2:
+        raise HTTPException(status_code=400, detail="At least two uploads are required")
+    if body.report_format not in SUPPORTED_FORMATS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown format '{body.report_format}'. Supported: {SUPPORTED_FORMATS}",
+        )
+
+    state = integration_jobs.start_job(
+        total=len(upload_ids),
+        worker=lambda handle: _merge_fossology_uploads(upload_ids, body.report_format, handle),
+    )
+    return {"job_id": state["job_id"], "status": state["status"]}
+
+
+@router.get("/integrations/jobs/{job_id}")
+def get_integration_job(job_id: str):
+    state = integration_jobs.read_job(job_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    return state
 
 
 # --------------------------------------------------------------------------- #
