@@ -109,8 +109,24 @@ class FossologyClient:
         response = self._request("GET", "/uploads", headers=self._headers(), params=params)
         return {"ok": True, "status_code": response.status_code}
 
+    def list_folders(self) -> list[dict]:
+        response = self._request("GET", "/folders", headers=self._headers())
+        data = response.json()
+        return data if isinstance(data, list) else []
+
     def list_uploads(self, params: dict) -> dict:
-        response = self._request("GET", "/uploads", headers=self._headers(), params=params)
+        foss_params = dict(params)
+        extra_headers: dict[str, str] = {}
+        if foss_params.get("page") is not None:
+            extra_headers["page"] = str(foss_params.pop("page"))
+        if foss_params.get("limit") is not None:
+            extra_headers["limit"] = str(foss_params.pop("limit"))
+        response = self._request(
+            "GET",
+            "/uploads",
+            headers=self._headers(extra_headers),
+            params=foss_params,
+        )
         return {
             "uploads": response.json(),
             "total_pages": response.headers.get("X-Total-Pages"),

@@ -264,6 +264,16 @@ def test_fossology_connection():
     return {"ok": True, "message": "Connection successful", **result}
 
 
+@router.get("/integrations/fossology/folders")
+def list_fossology_folders():
+    client = _require_fossology_client()
+    try:
+        folders = client.list_folders()
+    except FossologyApiError as exc:
+        raise HTTPException(status_code=exc.status_code or 502, detail=str(exc))
+    return {"folders": folders}
+
+
 @router.get("/integrations/fossology/uploads")
 def list_fossology_uploads(
     folder_id: int | None = None,

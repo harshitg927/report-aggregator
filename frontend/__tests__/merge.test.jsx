@@ -18,6 +18,7 @@ vi.mock("@/lib/api", () => ({
   api: {
     merge: vi.fn(),
     getIntegrationsConfig: vi.fn(),
+    listFossologyFolders: vi.fn(),
     listFossologyUploads: vi.fn(),
     mergeFossologyUploads: vi.fn(),
     getIntegrationJob: vi.fn(),
@@ -35,7 +36,8 @@ describe("merge wizard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.getIntegrationsConfig.mockResolvedValue({ fossology: { configured: false } });
-    api.listFossologyUploads.mockResolvedValue({ uploads: [] });
+    api.listFossologyFolders.mockResolvedValue({ folders: [] });
+    api.listFossologyUploads.mockResolvedValue({ uploads: [], total_pages: "1" });
   });
 
   it("rejects fewer than two files", async () => {
@@ -74,6 +76,9 @@ describe("merge wizard", () => {
 
   it("shows FOSSology upload metadata before selection", async () => {
     api.getIntegrationsConfig.mockResolvedValue({ fossology: { configured: true } });
+    api.listFossologyFolders.mockResolvedValue({
+      folders: [{ id: 3, name: "Third Party" }],
+    });
     api.listFossologyUploads.mockResolvedValue({
       uploads: [
         {
@@ -88,6 +93,7 @@ describe("merge wizard", () => {
         },
         { id: 2, uploadName: "pkg-b.zip" },
       ],
+      total_pages: "1",
     });
     render(<MergePage />);
 
@@ -105,8 +111,10 @@ describe("merge wizard", () => {
 
   it("validates FOSSology upload selection", async () => {
     api.getIntegrationsConfig.mockResolvedValue({ fossology: { configured: true } });
+    api.listFossologyFolders.mockResolvedValue({ folders: [{ id: 1, name: "Main" }] });
     api.listFossologyUploads.mockResolvedValue({
       uploads: [{ id: 1, uploadName: "pkg-a" }, { id: 2, uploadName: "pkg-b" }],
+      total_pages: "1",
     });
     render(<MergePage />);
 
@@ -120,8 +128,10 @@ describe("merge wizard", () => {
 
   it("polls a successful FOSSology job and redirects", async () => {
     api.getIntegrationsConfig.mockResolvedValue({ fossology: { configured: true } });
+    api.listFossologyFolders.mockResolvedValue({ folders: [{ id: 1, name: "Main" }] });
     api.listFossologyUploads.mockResolvedValue({
       uploads: [{ id: 1, uploadName: "pkg-a" }, { id: 2, uploadName: "pkg-b" }],
+      total_pages: "1",
     });
     api.mergeFossologyUploads.mockResolvedValue({ job_id: "job-1", status: "queued" });
     api.getIntegrationJob.mockResolvedValue({
@@ -142,6 +152,119 @@ describe("merge wizard", () => {
       report_format: "cyclonedx",
     }));
     await waitFor(() => expect(mockPush).toHaveBeenCalledWith("/reports/agg-1"));
+  });
+
+  it("loads folders and reloads uploads when folder changes", async () => {
+    api.getIntegrationsConfig.mockResolvedValue({
+      fossology: { configured: true, folder_id: 1 },
+    });
+    api.listFossologyFolders.mockResolvedValue({
+      folders: [
+        { id: 1, name: "Main" },
+        { id: 2, name: "Archive" },
+      ],
+    });
+    api.listFossologyUploads.mockResolvedValue({ uploads: [], total_pages: "1" });
+    render(<MergePage />);
+
+    await userEvent.click(screen.getByRole("button", { name: /fossology uploads/i }));
+    await waitFor(() => expect(api.listFossologyFolders).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(api.listFossologyUploads).toHaveBeenCalledWith(
+        expect.objectContaining({ folder_id: 1, page: 1, limit: 50 })
+      )
+    );
+
+    await userEvent.click(screen.getByLabelText(/^folder$/i));
+    await userEvent.click(screen.getByRole("button", { name: /archive \(id: 2\)/i }));
+    await waitFor(() =>
+      expect(api.listFossologyUploads).toHaveBeenLastCalledWith(
+        expect.objectContaining({ folder_id: 2, page: 1 })
+      )
+    );
+  });
+
+  it("filters folders in the searchable dropdown", async () => {
+    api.getIntegrationsConfig.mockResolvedValue({ fossology: { configured: true } });
+    api.listFossologyFolders.mockResolvedValue({
+      folders: [
+        { id: 1, name: "Main" },
+        { id: 2, name: "Archive" },
+        { id: 3, name: "Third Party" },
+      ],
+    });
+    api.listFossologyUploads.mockResolvedValue({ uploads: [], total_pages: "1" });
+    render(<MergePage />);
+
+    await userEvent.click(screen.getByRole("button", { name: /fossology uploads/i }));
+    await waitFor(() => expect(api.listFossologyFolders).toHaveBeenCalled());
+
+    await userEvent.click(screen.getByLabelText(/^folder$/i));
+    await userEvent.type(screen.getByLabelText(/search options/i), "arch");
+    expect(screen.getByRole("button", { name: /archive \(id: 2\)/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /main \(id: 1\)/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /third party \(id: 3\)/i })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /archive \(id: 2\)/i }));
+    await waitFor(() =>
+      expect(api.listFossologyUploads).toHaveBeenLastCalledWith(
+        expect.objectContaining({ folder_id: 2, page: 1 })
+      )
+    );
+  });
+
+  it("paginates uploads with next page", async () => {
+    api.getIntegrationsConfig.mockResolvedValue({ fossology: { configured: true } });
+    api.listFossologyFolders.mockResolvedValue({ folders: [{ id: 1, name: "Main" }] });
+    api.listFossologyUploads
+      .mockResolvedValueOnce({
+        uploads: [{ id: 1, uploadName: "pkg-a" }],
+        total_pages: "3",
+      })
+      .mockResolvedValueOnce({
+        uploads: [{ id: 2, uploadName: "pkg-b" }],
+        total_pages: "3",
+      });
+    render(<MergePage />);
+
+    await userEvent.click(screen.getByRole("button", { name: /fossology uploads/i }));
+    await screen.findByText("pkg-a");
+    expect(screen.getByText("Page 1 of 3")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /next/i }));
+    await waitFor(() =>
+      expect(api.listFossologyUploads).toHaveBeenLastCalledWith(
+        expect.objectContaining({ page: 2, limit: 50 })
+      )
+    );
+    await screen.findByText("pkg-b");
+    expect(screen.getByText("Page 2 of 3")).toBeInTheDocument();
+  });
+
+  it("resets to page 1 when page size changes", async () => {
+    api.getIntegrationsConfig.mockResolvedValue({ fossology: { configured: true } });
+    api.listFossologyFolders.mockResolvedValue({ folders: [{ id: 1, name: "Main" }] });
+    api.listFossologyUploads.mockResolvedValue({
+      uploads: [{ id: 1, uploadName: "pkg-a" }],
+      total_pages: "2",
+    });
+    render(<MergePage />);
+
+    await userEvent.click(screen.getByRole("button", { name: /fossology uploads/i }));
+    await screen.findByText("pkg-a");
+    await userEvent.click(screen.getByRole("button", { name: /next/i }));
+    await waitFor(() =>
+      expect(api.listFossologyUploads).toHaveBeenLastCalledWith(
+        expect.objectContaining({ page: 2 })
+      )
+    );
+
+    await userEvent.selectOptions(screen.getByLabelText(/page size/i), "25");
+    await waitFor(() =>
+      expect(api.listFossologyUploads).toHaveBeenLastCalledWith(
+        expect.objectContaining({ page: 1, limit: 25 })
+      )
+    );
   });
 
 });

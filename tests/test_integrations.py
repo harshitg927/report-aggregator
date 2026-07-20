@@ -115,13 +115,39 @@ def test_upload_listing_sends_auth_group_and_query_params(client, monkeypatch):
     assert seen["url"] == "https://fossology.example/api/v1/uploads"
     assert seen["headers"]["Authorization"] == "Bearer secret-token"
     assert seen["headers"]["groupName"] == "fossy"
+    assert seen["headers"]["page"] == "2"
+    assert seen["headers"]["limit"] == "20"
     assert seen["params"] == {
         "folderId": 7,
         "name": "pkg",
         "status": "open",
-        "page": 2,
-        "limit": 20,
     }
+
+
+def test_list_folders_returns_folder_array(client, monkeypatch):
+    _save_config(client)
+    seen = {}
+
+    def fake_request(method, url, **kwargs):
+        seen.update(method=method, url=url, headers=kwargs["headers"])
+        request = httpx.Request(method, url)
+        return httpx.Response(
+            200,
+            json=[
+                {"id": 1, "name": "Software Repository", "parent": None},
+                {"id": 3, "name": "Third Party", "parent": 1},
+            ],
+            request=request,
+        )
+
+    monkeypatch.setattr("report_aggregator.integrations.fossology.httpx.request", fake_request)
+    resp = client.get("/api/integrations/fossology/folders")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["folders"][0]["name"] == "Software Repository"
+    assert seen["url"] == "https://fossology.example/api/v1/folders"
+    assert seen["headers"]["Authorization"] == "Bearer secret-token"
+    assert seen["headers"]["groupName"] == "fossy"
 
 
 def test_retry_after_polling_is_honored(monkeypatch):

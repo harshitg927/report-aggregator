@@ -64,6 +64,8 @@ export const api = {
   testFossologyConnection: () =>
     json("/api/integrations/fossology/test", { method: "POST" }),
 
+  listFossologyFolders: () => json("/api/integrations/fossology/folders"),
+
   listFossologyUploads: (params = {}) =>
     json(`/api/integrations/fossology/uploads${queryString(params)}`),
 

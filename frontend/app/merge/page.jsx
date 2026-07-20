@@ -9,6 +9,7 @@ import { api, ApiError } from "@/lib/api";
 import { FORMAT_LABELS } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
@@ -78,6 +79,28 @@ function uploadDetails(upload) {
   ].filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== "");
 }
 
+function folderId(folder) {
+  return folder.id ?? folder.folderId ?? folder.folderid;
+}
+
+function folderName(folder) {
+  return fieldValue(folder, ["name", "folderName", "foldername"]) || `Folder ${folderId(folder)}`;
+}
+
+function normalizeFolders(raw) {
+  if (!Array.isArray(raw)) return [];
+  return [...raw].sort((a, b) => folderName(a).localeCompare(folderName(b)));
+}
+
+function pickDefaultFolderId(folders, configFolderId) {
+  if (configFolderId != null) {
+    const match = folders.find((folder) => Number(folderId(folder)) === Number(configFolderId));
+    if (match) return String(configFolderId);
+  }
+  if (folders.length > 0) return String(folderId(folders[0]));
+  return "";
+}
+
 export default function MergePage() {
   const router = useRouter();
   const [sourceMode, setSourceMode] = React.useState("local");
@@ -85,14 +108,30 @@ export default function MergePage() {
   const [format, setFormat] = React.useState("");
   const [submitting, setSubmitting] = React.useState(false);
   const [fossologyConfig, setFossologyConfig] = React.useState(null);
+  const [folders, setFolders] = React.useState([]);
+  const [selectedFolderId, setSelectedFolderId] = React.useState("");
   const [uploads, setUploads] = React.useState([]);
   const [uploadSearch, setUploadSearch] = React.useState("");
   const [uploadStatus, setUploadStatus] = React.useState("");
+  const [uploadPage, setUploadPage] = React.useState(1);
+  const [uploadPageSize, setUploadPageSize] = React.useState(50);
+  const [totalPages, setTotalPages] = React.useState(1);
   const [selectedUploads, setSelectedUploads] = React.useState([]);
   const [fossologyFormat, setFossologyFormat] = React.useState("cyclonedx");
   const [loadingUploads, setLoadingUploads] = React.useState(false);
   const [jobMessage, setJobMessage] = React.useState("");
   const inputRef = React.useRef(null);
+
+  const folderOptions = React.useMemo(
+    () => [
+      { value: "", label: "All folders" },
+      ...folders.map((folder) => {
+        const id = folderId(folder);
+        return { value: String(id), label: `${folderName(folder)} (ID: ${id})` };
+      }),
+    ],
+    [folders]
+  );
 
   React.useEffect(() => {
     let alive = true;
@@ -146,15 +185,24 @@ export default function MergePage() {
     }
   }
 
-  async function loadUploads() {
+  async function loadUploads(page = uploadPage, overrides = {}) {
+    const folderIdValue =
+      overrides.folderId !== undefined ? overrides.folderId : selectedFolderId;
+    const pageSize =
+      overrides.pageSize !== undefined ? overrides.pageSize : uploadPageSize;
+
     setLoadingUploads(true);
     try {
       const body = await api.listFossologyUploads({
+        folder_id: folderIdValue === "" ? undefined : Number(folderIdValue),
         name: uploadSearch,
         status: uploadStatus,
-        limit: 50,
+        page,
+        limit: pageSize,
       });
       setUploads(Array.isArray(body.uploads) ? body.uploads : []);
+      setTotalPages(Math.max(1, Number(body.total_pages) || 1));
+      setUploadPage(page);
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : "Failed to load uploads";
       toast.error(msg);
@@ -163,8 +211,50 @@ export default function MergePage() {
     }
   }
 
+  async function loadFoldersAndUploads() {
+    try {
+      const body = await api.listFossologyFolders();
+      const list = normalizeFolders(body.folders);
+      setFolders(list);
+      const defaultFolderId = pickDefaultFolderId(list, fossologyConfig?.folder_id);
+      setSelectedFolderId(defaultFolderId);
+      setUploadPage(1);
+      setSelectedUploads([]);
+      await loadUploads(1, { folderId: defaultFolderId });
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : "Failed to load folders";
+      toast.error(msg);
+    }
+  }
+
+  function applyUploadFilters() {
+    setUploadPage(1);
+    setSelectedUploads([]);
+    loadUploads(1);
+  }
+
+  function onFolderChange(folderIdValue) {
+    setSelectedFolderId(folderIdValue);
+    setUploadPage(1);
+    setSelectedUploads([]);
+    loadUploads(1, { folderId: folderIdValue });
+  }
+
+  function onPageSizeChange(size) {
+    const nextSize = Number(size);
+    setUploadPageSize(nextSize);
+    setUploadPage(1);
+    setSelectedUploads([]);
+    loadUploads(1, { pageSize: nextSize });
+  }
+
+  function goToPage(page) {
+    if (page < 1 || page > totalPages || page === uploadPage) return;
+    loadUploads(page);
+  }
+
   React.useEffect(() => {
-    if (sourceMode === "fossology" && fossologyConfig?.configured) loadUploads();
+    if (sourceMode === "fossology" && fossologyConfig?.configured) loadFoldersAndUploads();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceMode, fossologyConfig?.configured]);
 
@@ -332,6 +422,37 @@ export default function MergePage() {
               </div>
             ) : (
               <div className="grid gap-4">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <Label htmlFor="fossology-folder" className="mb-1 block">
+                      Folder
+                    </Label>
+                    <SearchableSelect
+                      id="fossology-folder"
+                      value={selectedFolderId}
+                      onChange={onFolderChange}
+                      options={folderOptions}
+                      placeholder="Search folders"
+                      disabled={loadingUploads}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="upload-page-size" className="mb-1 block">
+                      Page size
+                    </Label>
+                    <Select
+                      id="upload-page-size"
+                      value={String(uploadPageSize)}
+                      onChange={(e) => onPageSizeChange(e.target.value)}
+                      disabled={loadingUploads}
+                    >
+                      <option value="25">25 per page</option>
+                      <option value="50">50 per page</option>
+                      <option value="100">100 per page</option>
+                    </Select>
+                  </div>
+                </div>
+
                 <div className="grid gap-3 sm:grid-cols-[1fr_150px_auto]">
                   <Input
                     value={uploadSearch}
@@ -345,7 +466,12 @@ export default function MergePage() {
                     <option value="closed">Closed</option>
                     <option value="rejected">Rejected</option>
                   </Select>
-                  <Button type="button" variant="outline" onClick={loadUploads} disabled={loadingUploads}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={applyUploadFilters}
+                    disabled={loadingUploads}
+                  >
                     {loadingUploads ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
                     Search
                   </Button>
@@ -407,6 +533,28 @@ export default function MergePage() {
                     </DataTableRow>
                   )}
                 </DataTable>
+
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => goToPage(uploadPage - 1)}
+                    disabled={loadingUploads || uploadPage <= 1}
+                  >
+                    Previous
+                  </Button>
+                  <span className="text-sm text-muted-foreground">
+                    Page {uploadPage} of {totalPages}
+                  </span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => goToPage(uploadPage + 1)}
+                    disabled={loadingUploads || uploadPage >= totalPages}
+                  >
+                    Next
+                  </Button>
+                </div>
 
                 <div className="grid gap-3 sm:grid-cols-[220px_auto] sm:items-end">
                   <div>
