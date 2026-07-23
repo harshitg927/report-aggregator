@@ -1,13 +1,16 @@
-"""FOSSology REST client used by the API integration routes."""
+"""FOSSology client backed by fossology-python."""
 
 from __future__ import annotations
 
-import re
-import time
 from dataclasses import dataclass
+from types import SimpleNamespace
 from urllib.parse import urlparse
 
-import httpx
+from fossology import Fossology
+from fossology.enums import ClearingStatus, ReportFormat
+from fossology.exceptions import AuthenticationError, AuthorizationError
+from fossology.exceptions import FossologyApiError as LibFossologyApiError
+from fossology.obj import Folder, Upload
 
 from report_aggregator.integrations.config import FossologyConfig, IntegrationConfigError
 
@@ -30,7 +33,7 @@ class ScheduledReport:
     download_url: str | None = None
 
 
-def _api_base_url(base_url: str) -> str:
+def _server_url(base_url: str) -> str:
     cleaned = base_url.strip().rstrip("/")
     if not cleaned:
         raise IntegrationConfigError("FOSSology base URL is not configured")
@@ -38,136 +41,193 @@ def _api_base_url(base_url: str) -> str:
     if not parsed.scheme or not parsed.netloc:
         raise IntegrationConfigError("FOSSology base URL must include scheme and host")
     if cleaned.endswith("/api/v1"):
-        return cleaned
-    if cleaned.endswith("/api"):
-        return f"{cleaned}/v1"
-    return f"{cleaned}/api/v1"
+        cleaned = cleaned[: -len("/api/v1")].rstrip("/")
+    elif cleaned.endswith("/api"):
+        cleaned = cleaned[: -len("/api")].rstrip("/")
+    return cleaned
 
 
-def _detail(response: httpx.Response) -> str:
+def _to_report_format(report_format: str) -> ReportFormat | SimpleNamespace:
     try:
-        body = response.json()
+        return ReportFormat(report_format)
     except ValueError:
-        return response.text.strip() or response.reason_phrase
-    if isinstance(body, dict):
-        for key in ("message", "detail", "error"):
-            if body.get(key):
-                return str(body[key])
-        if body.get("code") and body.get("type"):
-            return f"{body['type']} ({body['code']})"
-    return str(body)
+        # fossology-python ReportFormat omits some server formats (e.g. cyclonedx).
+        return SimpleNamespace(value=report_format)
 
 
-def _retry_after(response: httpx.Response) -> float | None:
-    value = response.headers.get("Retry-After")
+def _to_clearing_status(value: str | None) -> ClearingStatus | None:
     if not value:
         return None
+    raw = value.strip()
     try:
-        return max(float(value), 0.0)
+        return ClearingStatus(raw)
     except ValueError:
+        pass
+    normalized = raw.replace("_", "").replace("-", "").lower()
+    for status in ClearingStatus:
+        if status.name.replace("_", "").lower() == normalized:
+            return status
+        if status.value.replace("_", "").replace("-", "").lower() == normalized:
+            return status
+    raise FossologyApiError(f"Unsupported FOSSology upload status: {value}", status_code=400)
+
+
+def _folder_arg(folder_id: int | None) -> Folder | None:
+    if folder_id is None:
         return None
+    return Folder(id=int(folder_id), name="", description="", parent=None)
+
+
+def _serialize_folder(folder: Folder) -> dict:
+    return {
+        "id": folder.id,
+        "name": folder.name,
+        "description": folder.description,
+        "parent": folder.parent,
+    }
+
+
+def _serialize_upload(upload: Upload) -> dict:
+    data = {
+        "id": upload.id,
+        "uploadName": upload.uploadname,
+        "description": upload.description,
+        "folderId": upload.folderid,
+        "folderName": upload.foldername,
+        "uploadDate": upload.uploaddate,
+        "assignee": upload.assignee,
+        "assigneeDate": upload.assigneeDate,
+        "closingDate": upload.closeDate,
+    }
+    if upload.hash is not None:
+        data["hash"] = {
+            "sha1": getattr(upload.hash, "sha1", None),
+            "md5": getattr(upload.hash, "md5", None),
+            "sha256": getattr(upload.hash, "sha256", None),
+            "size": getattr(upload.hash, "size", None),
+        }
+    return data
+
+
+def _map_lib_error(exc: BaseException) -> FossologyApiError:
+    if isinstance(exc, FossologyApiError):
+        return exc
+    if isinstance(exc, AuthorizationError):
+        return FossologyApiError(str(exc), status_code=403)
+    if isinstance(exc, AuthenticationError):
+        return FossologyApiError(str(exc), status_code=401)
+    if isinstance(exc, LibFossologyApiError):
+        return FossologyApiError(str(exc), status_code=502)
+    return FossologyApiError(f"FOSSology request failed: {exc}")
 
 
 class FossologyClient:
     def __init__(self, config: FossologyConfig):
         self.config = config
-        self.base_url = _api_base_url(config.base_url)
+        self.server_url = _server_url(config.base_url)
         self.token = config.resolve_token()
+        self._foss: Fossology | None = None
 
-    def _headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
-        headers = {"Authorization": f"Bearer {self.token}"}
-        if self.config.group_name:
-            headers["groupName"] = self.config.group_name
-        if extra:
-            headers.update(extra)
-        return headers
+    def _api(self) -> Fossology:
+        if self._foss is None:
+            try:
+                foss = Fossology(self.server_url, self.token, version="v1")
+                foss.session.verify = True
+                self._foss = foss
+            except Exception as exc:
+                raise _map_lib_error(exc) from exc
+        return self._foss
 
-    def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
-        url = f"{self.base_url}{path}"
-        try:
-            response = httpx.request(
-                method,
-                url,
-                timeout=self.config.timeout_seconds,
-                verify=self.config.verify_tls,
-                **kwargs,
-            )
-        except httpx.RequestError as exc:
-            raise FossologyApiError(f"FOSSology request failed: {exc}") from exc
-        if response.status_code >= 400:
-            raise FossologyApiError(
-                _detail(response),
-                status_code=response.status_code,
-                retry_after=_retry_after(response),
-            )
-        return response
+    def _group(self) -> str | None:
+        return self.config.group_name or None
 
     def test_connection(self) -> dict:
-        params = {"limit": 1}
-        if self.config.folder_id is not None:
-            params["folderId"] = self.config.folder_id
-        response = self._request("GET", "/uploads", headers=self._headers(), params=params)
-        return {"ok": True, "status_code": response.status_code}
+        foss = self._api()
+        try:
+            foss.list_uploads(
+                folder=_folder_arg(self.config.folder_id),
+                group=self._group(),
+                page_size=1,
+                page=1,
+            )
+        except Exception as exc:
+            raise _map_lib_error(exc) from exc
+        return {"ok": True, "status_code": 200}
 
     def list_folders(self) -> list[dict]:
-        response = self._request("GET", "/folders", headers=self._headers())
-        data = response.json()
-        return data if isinstance(data, list) else []
+        try:
+            folders = self._api().list_folders()
+        except Exception as exc:
+            raise _map_lib_error(exc) from exc
+        return [_serialize_folder(folder) for folder in folders]
 
     def list_uploads(self, params: dict) -> dict:
         foss_params = dict(params)
-        extra_headers: dict[str, str] = {}
-        if foss_params.get("page") is not None:
-            extra_headers["page"] = str(foss_params.pop("page"))
-        if foss_params.get("limit") is not None:
-            extra_headers["limit"] = str(foss_params.pop("limit"))
-        response = self._request(
-            "GET",
-            "/uploads",
-            headers=self._headers(extra_headers),
-            params=foss_params,
-        )
+        folder_id = foss_params.pop("folderId", None)
+        if folder_id is None:
+            folder_id = self.config.folder_id
+        recursive = True
+        if "recursive" in foss_params:
+            recursive = str(foss_params.pop("recursive")).lower() not in {"false", "0", "no"}
+        name = foss_params.pop("name", None)
+        status = _to_clearing_status(foss_params.pop("status", None))
+        page = int(foss_params.pop("page", 1) or 1)
+        page_size = int(foss_params.pop("limit", 100) or 100)
+        try:
+            uploads, total_pages = self._api().list_uploads(
+                folder=_folder_arg(int(folder_id) if folder_id is not None else None),
+                group=self._group(),
+                recursive=recursive,
+                name=name,
+                status=status,
+                page_size=page_size,
+                page=page,
+            )
+        except Exception as exc:
+            raise _map_lib_error(exc) from exc
         return {
-            "uploads": response.json(),
-            "total_pages": response.headers.get("X-Total-Pages"),
+            "uploads": [_serialize_upload(upload) for upload in uploads],
+            "total_pages": str(total_pages) if total_pages is not None else None,
         }
 
     def get_upload(self, upload_id: int) -> dict:
-        response = self._request("GET", f"/uploads/{upload_id}", headers=self._headers())
-        data = response.json()
-        return data if isinstance(data, dict) else {}
+        try:
+            upload = self._api().detail_upload(int(upload_id), group=self._group())
+        except Exception as exc:
+            raise _map_lib_error(exc) from exc
+        return _serialize_upload(upload)
 
     def schedule_report(self, upload_id: int, report_format: str) -> ScheduledReport:
-        response = self._request(
-            "GET",
-            "/report",
-            headers=self._headers({"uploadId": str(upload_id), "reportFormat": report_format}),
-        )
-        body = response.json()
-        message = str(body.get("message") or body.get("detail") or "")
-        match = re.search(r"/report/(\d+)\b", message)
-        if not match:
-            match = re.search(r"\b(\d+)\b", message)
-        if not match:
-            raise FossologyApiError("FOSSology did not return a report job id")
-        return ScheduledReport(job_id=int(match.group(1)), download_url=message or None)
+        try:
+            upload = self._api().detail_upload(int(upload_id), group=self._group())
+            job_id = self._api().generate_report(
+                upload,
+                report_format=_to_report_format(report_format),
+                group=self._group(),
+            )
+        except Exception as exc:
+            raise _map_lib_error(exc) from exc
+        return ScheduledReport(job_id=int(job_id))
 
     def download_report(self, report_job_id: int) -> bytes:
-        response = self._request("GET", f"/report/{report_job_id}", headers=self._headers())
-        return response.content
+        try:
+            content, _name = self._api().download_report(
+                int(report_job_id),
+                group=self._group(),
+                wait_time=0,
+            )
+        except Exception as exc:
+            raise _map_lib_error(exc) from exc
+        return content
 
     def wait_for_report(self, report_job_id: int) -> bytes:
-        deadline = time.monotonic() + self.config.timeout_seconds
-        while True:
-            try:
-                return self.download_report(report_job_id)
-            except FossologyApiError as exc:
-                if exc.status_code != 503:
-                    raise
-                now = time.monotonic()
-                if now >= deadline:
-                    raise FossologyApiError(
-                        f"Timed out waiting for FOSSology report job {report_job_id}",
-                        status_code=exc.status_code,
-                    ) from exc
-                time.sleep(min(exc.retry_after or 1.0, max(deadline - now, 0.0)))
+        wait_time = max(int(self.config.timeout_seconds), 1)
+        try:
+            content, _name = self._api().download_report(
+                int(report_job_id),
+                group=self._group(),
+                wait_time=wait_time,
+            )
+        except Exception as exc:
+            raise _map_lib_error(exc) from exc
+        return content

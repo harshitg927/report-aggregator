@@ -32,6 +32,7 @@ api = [
     "uvicorn[standard]",
     "python-multipart",
     "httpx",
+    "fossology>=4.0.0,<5",
 ]
 
 [tool.hatch.build.targets.wheel]

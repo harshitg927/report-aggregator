@@ -370,6 +370,10 @@ pip install -e ".[api]"
 python -m report_aggregator.api          # http://127.0.0.1:8000
 ```
 
+The `api` extra includes [`fossology`](https://fossology.github.io/fossology-python/)
+(fossology-python) for the FOSSology Integrations feature (import existing uploads).
+TLS certificate verification is always enabled for that connection.
+
 Key endpoints (all under `/api`):
 
 | Method | Path | Description |

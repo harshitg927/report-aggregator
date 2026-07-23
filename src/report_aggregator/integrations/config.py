@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from report_aggregator.api import storage
@@ -23,7 +24,6 @@ class FossologyConfig:
     token: str | None = None
     group_name: str | None = None
     folder_id: int | None = None
-    verify_tls: bool = True
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
 
     @property
@@ -52,7 +52,6 @@ class FossologyConfig:
             "base_url": self.base_url,
             "group_name": self.group_name or "",
             "folder_id": self.folder_id,
-            "verify_tls": self.verify_tls,
             "timeout_seconds": self.timeout_seconds,
             "has_token": bool(self.token),
             "token_is_env_ref": bool((self.token or "").startswith("env:")),
@@ -85,12 +84,12 @@ def _write_all(data: dict[str, Any]) -> None:
 def load_fossology_config() -> FossologyConfig:
     all_data = _read_all()
     raw = (all_data.get("fossology") or {}) if isinstance(all_data, dict) else {}
+    # Legacy verify_tls keys in integrations.json are ignored intentionally.
     return FossologyConfig(
         base_url=str(raw.get("base_url") or ""),
         token=raw.get("token") or None,
         group_name=raw.get("group_name") or None,
         folder_id=raw.get("folder_id"),
-        verify_tls=bool(raw.get("verify_tls", True)),
         timeout_seconds=float(raw.get("timeout_seconds") or DEFAULT_TIMEOUT_SECONDS),
     )
 
@@ -105,7 +104,6 @@ def save_fossology_config(payload: dict[str, Any]) -> FossologyConfig:
             str(payload.get("group_name", current.get("group_name") or "")).strip() or None
         ),
         "folder_id": payload.get("folder_id", current.get("folder_id")),
-        "verify_tls": bool(payload.get("verify_tls", current.get("verify_tls", True))),
         "timeout_seconds": float(
             payload.get("timeout_seconds", current.get("timeout_seconds") or DEFAULT_TIMEOUT_SECONDS)
         ),

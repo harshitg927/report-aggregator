@@ -29,7 +29,6 @@ describe("integrations page", () => {
         base_url: "https://fossology.example",
         group_name: "fossy",
         folder_id: 7,
-        verify_tls: true,
         timeout_seconds: 30,
         has_token: true,
       },

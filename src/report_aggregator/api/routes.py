@@ -127,7 +127,6 @@ class FossologyConfigRequest(BaseModel):
     token: str | None = None
     group_name: str | None = None
     folder_id: int | None = None
-    verify_tls: bool = True
     timeout_seconds: float = integration_config.DEFAULT_TIMEOUT_SECONDS
 
 

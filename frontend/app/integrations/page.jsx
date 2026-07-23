@@ -15,7 +15,6 @@ const DEFAULT_FORM = {
   token: "",
   group_name: "",
   folder_id: "",
-  verify_tls: true,
   timeout_seconds: 30,
 };
 
@@ -38,7 +37,6 @@ export default function IntegrationsPage() {
           token: "",
           group_name: cfg.group_name || "",
           folder_id: cfg.folder_id ?? "",
-          verify_tls: cfg.verify_tls !== false,
           timeout_seconds: cfg.timeout_seconds || 30,
         });
         setHasToken(Boolean(cfg.has_token));
@@ -62,7 +60,6 @@ export default function IntegrationsPage() {
       base_url: form.base_url,
       group_name: form.group_name,
       folder_id: form.folder_id === "" ? null : Number(form.folder_id),
-      verify_tls: form.verify_tls,
       timeout_seconds: Number(form.timeout_seconds),
     };
     if (clearToken) payload.token = "";
@@ -178,26 +175,15 @@ export default function IntegrationsPage() {
                 </div>
               </div>
 
-              <div className="grid gap-4 sm:grid-cols-2">
-                <label className="flex items-center gap-2 text-sm font-medium">
-                  <input
-                    type="checkbox"
-                    checked={form.verify_tls}
-                    onChange={(e) => update("verify_tls", e.target.checked)}
-                    className="h-4 w-4"
-                  />
-                  Verify TLS certificates
-                </label>
-                <div className="grid gap-1.5">
-                  <Label htmlFor="timeout_seconds">Timeout seconds</Label>
-                  <Input
-                    id="timeout_seconds"
-                    type="number"
-                    min="1"
-                    value={form.timeout_seconds}
-                    onChange={(e) => update("timeout_seconds", e.target.value)}
-                  />
-                </div>
+              <div className="grid gap-1.5 sm:max-w-xs">
+                <Label htmlFor="timeout_seconds">Timeout seconds</Label>
+                <Input
+                  id="timeout_seconds"
+                  type="number"
+                  min="1"
+                  value={form.timeout_seconds}
+                  onChange={(e) => update("timeout_seconds", e.target.value)}
+                />
               </div>
 
               <div className="flex flex-wrap gap-2 pt-2">
