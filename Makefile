@@ -1,5 +1,6 @@
 ## Phony targets
-.PHONY: install install-api install-ui dev-api dev-ui dev-all test test-py test-ui lint
+.PHONY: install install-api install-ui dev-api dev-ui dev-all test test-py test-ui lint \
+	docker-build docker-up docker-down
 
 ## ── Setup ────────────────────────────────────────────────────────────────────
 
@@ -21,6 +22,21 @@ dev-ui:                           ## start the Next.js dev server on :3000
 
 dev-all:                          ## start both services together (via frontend/scripts/dev.sh)
 	cd frontend && npm run dev:all
+
+## ── Docker ────────────────────────────────────────────────────────────────────
+
+docker-build:                     ## build API and frontend images
+	docker compose build
+
+docker-up:                        ## start full stack (API :8000, UI :3000)
+	docker compose up --build -d
+
+docker-down:                      ## stop compose services
+	docker compose down
+
+# CLI example (same Python image, override the command):
+#   docker run --rm -v "$$PWD:/work" -w /work report-aggregator:latest \
+#     report-aggregator merge a.json b.json -o merged.json
 
 ## ── Testing ───────────────────────────────────────────────────────────────────
 

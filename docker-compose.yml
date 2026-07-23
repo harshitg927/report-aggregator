@@ -1,0 +1,26 @@
+services:
+  api:
+    build: .
+    image: report-aggregator:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      - workspaces:/data/workspaces
+    environment:
+      REPORT_AGGREGATOR_API_HOST: "0.0.0.0"
+      REPORT_AGGREGATOR_API_PORT: "8000"
+      REPORT_AGGREGATOR_WORKSPACE: "/data/workspaces"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+    image: report-aggregator-ui:latest
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  workspaces:

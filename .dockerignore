@@ -1,0 +1,43 @@
+.git
+.github
+.venv
+venv
+env
+.env
+.env.*
+
+# Frontend is built from its own context
+frontend/
+
+# Dev / test artifacts
+tests/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Runtime / local data
+.api_workspaces/
+custom_ws/
+merged.spdx
+merged.provenance.json
+*.provenance.json
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Docker files themselves (avoid rebuild churn on metadata edits)
+Dockerfile
+docker-compose.yml
+.dockerignore

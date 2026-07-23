@@ -15,7 +15,9 @@ report-aggregator/
 │   ├── components/          # React components
 │   ├── lib/                 # Shared utilities and API client
 │   └── README.md            # Frontend-specific documentation
-├── Makefile                 # Convenience targets (install, dev, test, lint)
+├── Dockerfile               # Python API + CLI image
+├── docker-compose.yml       # Full stack (API + UI)
+├── Makefile                 # Convenience targets (install, dev, test, lint, docker)
 ├── pyproject.toml           # Python package config
 └── README.md                # This file
 ```
@@ -40,6 +42,28 @@ make dev-ui    # terminal 2 — Next.js dev server
 ```
 
 See [`frontend/README.md`](frontend/README.md) for full frontend documentation.
+
+## Docker
+
+The repo ships one Python image (API by default, CLI via command override) and one
+Next.js frontend image. Compose runs the full stack.
+
+```bash
+# Full stack — API http://localhost:8000 , UI http://localhost:3000
+docker compose up --build
+# or: make docker-up
+
+# API only
+docker build -t report-aggregator:latest .
+docker run --rm -p 8000:8000 -v ra-workspaces:/data/workspaces report-aggregator:latest
+
+# CLI merge (mount your working directory)
+docker run --rm -v "$PWD:/work" -w /work report-aggregator:latest \
+  report-aggregator merge report-a.json report-b.json -o merged.json
+```
+
+Stop the stack with `docker compose down` (or `make docker-down`). Aggregate
+workspaces persist in the Compose `workspaces` volume.
 
 ## Features
 
