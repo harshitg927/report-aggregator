@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tomllib
 from dataclasses import dataclass, field
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -37,13 +38,15 @@ class MappingConfig:
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
 
-# Directory where mapping TOML files live (project root / mappings/)
-_MAPPINGS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "mappings"
-
-
 def get_mappings_dir() -> Path:
-    """Return the path to the mappings directory."""
-    return _MAPPINGS_DIR
+    """Return the path to the mappings directory shipped inside the package.
+
+    Resolved via ``importlib.resources`` so it works from an installed wheel
+    (including ``pip install --target`` layouts) rather than assuming a
+    repo-root ``mappings/`` directory. ``report_aggregator`` installs unzipped,
+    so this always resolves to a real filesystem path.
+    """
+    return Path(str(resources.files("report_aggregator").joinpath("mappings")))
 
 
 def load_mapping(format_name: str, mappings_dir: Path | None = None) -> MappingConfig:
@@ -59,7 +62,7 @@ def load_mapping(format_name: str, mappings_dir: Path | None = None) -> MappingC
     Raises:
         MappingError: If the file is missing, cannot be parsed, or lacks required keys.
     """
-    directory = mappings_dir or _MAPPINGS_DIR
+    directory = mappings_dir or get_mappings_dir()
     toml_path = directory / f"{format_name}.toml"
 
     if not toml_path.exists():

@@ -30,7 +30,8 @@ def test_cli_merge_cyclonedx(tmp_path: Path, cdxfckeditor_path: Path, cdxzlib_pa
     args = MockArgs(
         inputs=[cdxfckeditor_path, cdxzlib_path],
         output=out_path,
-        format=None
+        format=None,
+        json=False,
     )
     
     exit_code = _handle_merge(args)
@@ -55,7 +56,8 @@ def test_cli_merge_spdx2tv(tmp_path: Path, spdx2fckeditor_path: Path, spdx2zlib_
     args = MockArgs(
         inputs=[spdx2fckeditor_path, spdx2zlib_path],
         output=out_path,
-        format=None
+        format=None,
+        json=False,
     )
     
     exit_code = _handle_merge(args)

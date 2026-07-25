@@ -60,6 +60,12 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Report format (auto-detected from extension if omitted)",
     )
+    merge_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit a machine-readable JSON summary on stdout "
+        "(output_path, provenance_path, format, conflicts) for subprocess callers",
+    )
 
     # Edit subcommand
     edit_parser = subparsers.add_parser(
@@ -164,7 +170,8 @@ def _handle_merge(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
-        print(f"Auto-detected format: {format_name}")
+        if not args.json:
+            print(f"Auto-detected format: {format_name}")
     else:
         # Validate all inputs match the explicitly provided format
         detected_formats = [(p, _sniff_format(p)) for p in input_paths]
@@ -222,6 +229,23 @@ def _handle_merge(args: argparse.Namespace) -> int:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_bytes(result.output_bytes)
     sidecar_path = result.provenance.write_sidecar(output_path)
+
+    if args.json:
+        import json as _json
+
+        provenance = result.provenance.to_dict()
+        _json.dump(
+            {
+                "output_path": str(output_path),
+                "provenance_path": str(sidecar_path),
+                "format": format_name,
+                "inputs_merged": len(input_paths),
+                "conflicts": provenance.get("conflicts", []),
+            },
+            sys.stdout,
+        )
+        sys.stdout.write("\n")
+        return 0
 
     print(f"Merged {len(input_paths)} reports → {output_path}")
     print(f"Provenance sidecar → {sidecar_path}")
