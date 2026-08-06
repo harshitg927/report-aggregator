@@ -1,3 +1,9 @@
+/*
+ SPDX-FileCopyrightText: © 2026 Harshit Gandhi <gandhiharshit716@gmail.com>
+
+ SPDX-License-Identifier: MIT
+*/
+
 export const FORMAT_LABELS = {
   cyclonedx: "CycloneDX 1.4",
   spdx2tv: "SPDX 2 TV",

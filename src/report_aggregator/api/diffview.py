@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Harshit Gandhi <gandhiharshit716@gmail.com>
+#
+# SPDX-License-Identifier: MIT
+
 """Large-file-safe raw/diff support for the API service.
 
 This module powers the VS Code-style raw/diff view in the UI. Reports can be

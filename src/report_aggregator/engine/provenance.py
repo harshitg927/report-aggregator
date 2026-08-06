@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Harshit Gandhi <gandhiharshit716@gmail.com>
+#
+# SPDX-License-Identifier: MIT
+
 """Provenance sidecar — tracks which input contributed each field and records conflicts."""
 
 from __future__ import annotations

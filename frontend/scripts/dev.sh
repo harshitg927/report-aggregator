@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: © 2026 Harshit Gandhi <gandhiharshit716@gmail.com>
+#
+# SPDX-License-Identifier: MIT
+
 # Launch the report-aggregator API and the Next.js dev server together.
 #
 # The Python backend is the parent directory of this frontend/ folder

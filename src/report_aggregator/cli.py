@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Harshit Gandhi <gandhiharshit716@gmail.com>
+#
+# SPDX-License-Identifier: MIT
+
 """CLI entry point for report-aggregator."""
 
 from __future__ import annotations

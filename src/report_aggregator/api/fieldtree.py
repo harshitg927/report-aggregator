@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Harshit Gandhi <gandhiharshit716@gmail.com>
+#
+# SPDX-License-Identifier: MIT
+
 """Field-tree builder for the transparent editable view.
 
 Flattens a merged report's native document into a list of nodes, each with a

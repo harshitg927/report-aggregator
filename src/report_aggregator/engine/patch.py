@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Harshit Gandhi <gandhiharshit716@gmail.com>
+#
+# SPDX-License-Identifier: MIT
+
 """RFC-6902 JSON Patch implementation for edit layer."""
 
 from dataclasses import dataclass

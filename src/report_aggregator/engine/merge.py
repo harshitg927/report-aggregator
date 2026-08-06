@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Harshit Gandhi <gandhiharshit716@gmail.com>
+#
+# SPDX-License-Identifier: MIT
+
 """Core merge engine — the heart of the report aggregator.
 
 Implements the format-agnostic merge loop from architecture §5:

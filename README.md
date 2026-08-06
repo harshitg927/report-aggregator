@@ -1,3 +1,8 @@
+<!-- SPDX-FileCopyrightText: © 2026 Harshit Gandhi <gandhiharshit716@gmail.com>
+
+     SPDX-License-Identifier: MIT
+-->
+
 # Report Aggregator
 
 Merge N FOSSology-generated reports into one deduplicated report of the same format.

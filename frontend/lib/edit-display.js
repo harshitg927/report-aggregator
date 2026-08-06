@@ -1,3 +1,9 @@
+/*
+ SPDX-FileCopyrightText: © 2026 Harshit Gandhi <gandhiharshit716@gmail.com>
+
+ SPDX-License-Identifier: MIT
+*/
+
 const MAX_PREVIEW = 120;
 
 function previewValue(value) {

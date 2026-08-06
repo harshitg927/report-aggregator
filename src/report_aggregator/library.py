@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Harshit Gandhi <gandhiharshit716@gmail.com>
+#
+# SPDX-License-Identifier: MIT
+
 """High-level public API for merging FOSSology reports.
 
 This is the stable, import-friendly entry point for embedding the merge engine

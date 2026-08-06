@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Harshit Gandhi <gandhiharshit716@gmail.com>
+#
+# SPDX-License-Identifier: MIT
+
 # Multi-stage Next.js production image (standalone output).
 FROM node:20-alpine AS deps
 WORKDIR /app

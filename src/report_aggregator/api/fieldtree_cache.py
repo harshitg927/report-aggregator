@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Harshit Gandhi <gandhiharshit716@gmail.com>
+#
+# SPDX-License-Identifier: MIT
+
 """Disk + in-process cache for built field trees.
 
 Field-tree construction parses the full merged report. Caching the flattened

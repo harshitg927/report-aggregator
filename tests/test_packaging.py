@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Harshit Gandhi <gandhiharshit716@gmail.com>
+#
+# SPDX-License-Identifier: MIT
+
 """Guards that the package is self-contained (mappings ship inside it) and that
 the ``python -m report_aggregator`` subprocess contract works.
 

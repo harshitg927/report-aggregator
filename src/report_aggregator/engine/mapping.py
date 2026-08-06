@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Harshit Gandhi <gandhiharshit716@gmail.com>
+#
+# SPDX-License-Identifier: MIT
+
 """TOML mapping loader — reads per-format mapping files and validates required keys."""
 
 from __future__ import annotations

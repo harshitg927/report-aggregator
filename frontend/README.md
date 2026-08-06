@@ -1,3 +1,8 @@
+<!-- SPDX-FileCopyrightText: © 2026 Harshit Gandhi <gandhiharshit716@gmail.com>
+
+     SPDX-License-Identifier: MIT
+-->
+
 # Report Aggregator — Frontend
 
 A Next.js (App Router, JavaScript) front-end for the

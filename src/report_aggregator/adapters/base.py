@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Harshit Gandhi <gandhiharshit716@gmail.com>
+#
+# SPDX-License-Identifier: MIT
+
 """Adapter base — Protocol definition for format adapters.
 
 Every format adapter implements this interface. The merge engine calls these

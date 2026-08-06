@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Harshit Gandhi <gandhiharshit716@gmail.com>
+#
+# SPDX-License-Identifier: MIT
+
 """Tests for human-readable edit summaries stored in provenance."""
 
 from report_aggregator.api.edit_summary import summarize_patch, summarize_text_diff

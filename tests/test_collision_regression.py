@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Harshit Gandhi <gandhiharshit716@gmail.com>
+#
+# SPDX-License-Identifier: MIT
+
 """Regression tests for cross-instance local-ID collisions.
 
 These cover the documented "re-namespace across independent reports" scenario

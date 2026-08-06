@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Harshit Gandhi <gandhiharshit716@gmail.com>
+#
+# SPDX-License-Identifier: MIT
+
 """Shared format detection and adapter registry.
 
 Factored out of ``cli.py`` so both the CLI and the API service use the same

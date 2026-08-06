@@ -1,3 +1,9 @@
+/*
+ SPDX-FileCopyrightText: © 2026 Harshit Gandhi <gandhiharshit716@gmail.com>
+
+ SPDX-License-Identifier: MIT
+*/
+
 // Stable color assignment for provenance source ids.
 
 const PALETTE = [

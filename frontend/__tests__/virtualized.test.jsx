@@ -1,3 +1,9 @@
+/*
+ SPDX-FileCopyrightText: © 2026 Harshit Gandhi <gandhiharshit716@gmail.com>
+
+ SPDX-License-Identifier: MIT
+*/
+
 import { renderHook, act, render, screen, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 

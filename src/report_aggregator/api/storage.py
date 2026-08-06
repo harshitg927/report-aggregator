@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Harshit Gandhi <gandhiharshit716@gmail.com>
+#
+# SPDX-License-Identifier: MIT
+
 """Per-aggregate workspace storage for the API service.
 
 Each merge creates a workspace directory keyed by ``aggregate_id`` containing:

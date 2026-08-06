@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Harshit Gandhi <gandhiharshit716@gmail.com>
+#
+# SPDX-License-Identifier: MIT
+
 ## Phony targets
 .PHONY: install install-api install-ui dev-api dev-ui dev-all test test-py test-ui lint \
 	docker-build docker-up docker-down

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Harshit Gandhi <gandhiharshit716@gmail.com>
+#
+# SPDX-License-Identifier: MIT
+
 # Python image for report-aggregator API (default) and CLI (command override).
 FROM python:3.12-slim
 
