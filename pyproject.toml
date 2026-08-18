@@ -8,11 +8,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "report-aggregator"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Merge N FOSSology-generated reports into one deduplicated report of the same format"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
+authors = [{ name = "Harshit Gandhi", email = "gandhiharshit716@gmail.com" }]
+keywords = ["fossology", "spdx", "sbom", "cyclonedx", "license-compliance", "sbom-merge"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "License :: OSI Approved :: MIT License",
@@ -21,6 +23,14 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Software Development :: Build Tools",
 ]
+# The core library and CLI are standard-library only; see the `api` extra for
+# the optional FastAPI service and FOSSology client.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/harshitg927/report-aggregator"
+Repository = "https://github.com/harshitg927/report-aggregator"
+Issues = "https://github.com/harshitg927/report-aggregator/issues"
 
 [project.scripts]
 report-aggregator = "report_aggregator.cli:main"
@@ -35,12 +45,27 @@ api = [
     "fastapi",
     "uvicorn[standard]",
     "python-multipart",
+    "pydantic>=2",
     "httpx",
     "fossology>=4.0.0,<5",
 ]
 
+[tool.hatch.version]
+path = "src/report_aggregator/__init__.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/report_aggregator"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+    "/README.md",
+    "/LICENSE",
+    "/LICENSES",
+    "/Makefile",
+    "/pyproject.toml",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
